@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn strict_try_from_bytes_rejects_invalid_option_tag() {
         let mut bytes = on_chain_bytes(&sample());
-        let tag_offset = 1 + 32 * 7 + 8 * 4 + 64 + 32 * 2;
+        let tag_offset = 1 + 32 * 7 + 8 * 4 + 64 + 32 * 4;
         bytes[tag_offset] = 2;
         assert!(matches!(
             SwapDvp::try_from_bytes(&bytes),

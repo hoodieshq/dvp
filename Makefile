@@ -5,6 +5,7 @@ SHELL := /usr/bin/env bash
 .PHONY: install build build-hook-fixture build-smart-wallet-fixture fmt generate-idl generate-clients
 .PHONY: unit-test integration-test integration-test-no-build all-test
 .PHONY: unit-coverage coverage-html all-coverage verify-program-id
+.PHONY: fetch-test-fixtures check-test-fixtures
 
 # Pinned so local and CI builds match regardless of the installed Solana CLI's
 # default. v1.57 (CLI 4.3) pushes process_settle_dvp past the 4096-byte SBF
@@ -14,6 +15,13 @@ SBF_TOOLS_VERSION ?= v1.52
 # Install JS deps (codama renderers, tsx, etc.)
 install:
 	pnpm install
+
+# External programs are downloaded explicitly and checked before test runs.
+fetch-test-fixtures:
+	bash scripts/fetch-test-fixtures.sh
+
+check-test-fixtures:
+	bash scripts/fetch-test-fixtures.sh --check
 
 # Build the on-chain program. Regenerates clients first so the workspace
 # Rust client crate is up to date before cargo-build-sbf compiles the program.
@@ -71,20 +79,23 @@ fmt:
 	@cd tests/integration-tests && cargo clippy --all-targets -- -D warnings
 	pnpm format
 
-# Unit tests: program crate's #[cfg(test)] modules + JS client tests.
+# Unit tests: program and Rust/JS clients.
 unit-test:
 	@echo "Running unit tests for swap program..."
 	pnpm test:unit
 	@cd program && cargo test
+	@cargo test -p dvp-swap-program-client --all-features
 
 # Integration tests (litesvm-based).
-integration-test-no-build:
+integration-test-no-build: check-test-fixtures
 	@echo "Running integration tests for swap program..."
 	@cd tests/integration-tests && cargo test -- --nocapture
 
 integration-test: build integration-test-no-build
 
-all-test: unit-test integration-test
+# Generate clients before JS unit tests, including on a clean checkout.
+all-test: build
+	$(MAKE) unit-test integration-test-no-build
 
 # Run unit tests with coverage
 unit-coverage:

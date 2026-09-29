@@ -142,6 +142,10 @@ make fmt                # cargo fmt + clippy + pnpm format
 make verify-program-id  # pre-deploy: deploy keypair matches the declared program ID
 ```
 
+Run `make fetch-test-fixtures` once before integration tests. External Token-2022
+and SPL Record binaries are pinned by SHA-256; see [test fixtures](tests/fixtures/README.md).
+Host tests use Rust 1.93.1 and LiteSVM 0.16 (Agave 4.2).
+
 The integration tests live in `tests/integration-tests/` and run against the compiled `.so` via [LiteSVM](https://github.com/LiteSVM/litesvm). See `tests/integration-tests/src/` for one directory per instruction.
 
 ### Deploying
