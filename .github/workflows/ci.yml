@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Agave CLI
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://release.anza.xyz/v4.2.2/install -o "$RUNNER_TEMP/install-agave.sh"
+          sh "$RUNNER_TEMP/install-agave.sh"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned test programs
+        run: make fetch-test-fixtures
+      - name: Build program and generate clients
+        run: make build
+      - name: Check generated IDL
+        run: git diff --exit-code -- idl/dvp_swap_program.json
+      - name: Check Rust
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build TypeScript client
+        run: pnpm build
+      - name: Test
+        run: make unit-test integration-test-no-build
