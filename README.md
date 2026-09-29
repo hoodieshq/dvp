@@ -16,7 +16,7 @@ Two parties — **`user_a`** (seller) and **`user_b`** (buyer) — agree to exch
 
 The trade lives as a single `SwapDvp` PDA with two associated escrow ATAs (one per leg). Each side funds its own leg by sending tokens to the corresponding escrow ATA via a plain SPL Transfer — there's no custom funding instruction, so custodian integrations need no special program call. Settlement transfers both legs in a single transaction, refunds any over-deposit to the depositor, and closes the PDA + escrows.
 
-The planned confidential leg B extension is described in the [Confidential Transfer specification](docs/confidentia_transfers/spec.md). Its implementation is in progress.
+The planned confidential leg B extension is described in the [Confidential Transfer specification](docs/confidential_transfers/spec.md). Its implementation is in progress.
 
 ## State
 
