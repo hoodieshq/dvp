@@ -2,15 +2,13 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := build
 
-.PHONY: install build build-hook-fixture build-smart-wallet-fixture fmt generate-idl generate-clients
+# Pin the SBF compiler used by Agave 4.2.2's cargo-build-sbf 4.1.0.
+PLATFORM_TOOLS_VERSION := v1.54
+
+.PHONY: install build build-sbf build-hook-fixture build-smart-wallet-fixture fmt generate-idl generate-clients
 .PHONY: unit-test integration-test integration-test-no-build all-test
 .PHONY: unit-coverage coverage-html all-coverage verify-program-id
 .PHONY: fetch-test-fixtures check-test-fixtures
-
-# Pinned so local and CI builds match regardless of the installed Solana CLI's
-# default. v1.57 (CLI 4.3) pushes process_settle_dvp past the 4096-byte SBF
-# frame and fails to link smart-wallet-fixture (no __rdl_alloc_error_handler).
-SBF_TOOLS_VERSION ?= v1.52
 
 # Install JS deps (codama renderers, tsx, etc.)
 install:
@@ -30,9 +28,13 @@ check-test-fixtures:
 # sbf target).
 build:
 	$(MAKE) generate-clients
-	cd program && cargo-build-sbf --tools-version $(SBF_TOOLS_VERSION)
+	$(MAKE) build-sbf
 	$(MAKE) build-hook-fixture
 	$(MAKE) build-smart-wallet-fixture
+
+# CI receives generated clients from the generation job before this step.
+build-sbf:
+	cd program && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
 
 # Pre-deploy guard: cargo-build-sbf writes a random target/deploy/*-keypair.json
 # that does NOT match declare_id!, so deploying with it (or without an explicit
@@ -54,13 +56,13 @@ verify-program-id:
 # end-to-end. The .so lands in the workspace target/deploy/ alongside
 # the swap program's .so.
 build-hook-fixture:
-	cd tests/transfer-hook-fixture && cargo-build-sbf --tools-version $(SBF_TOOLS_VERSION)
+	cd tests/transfer-hook-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
 
 # Build the smart-wallet fixture used by integration tests to model a
 # Squads-style vault party (signs via CPI). The .so lands in the
 # workspace target/deploy/ alongside the swap program's .so.
 build-smart-wallet-fixture:
-	cd tests/smart-wallet-fixture && cargo-build-sbf --tools-version $(SBF_TOOLS_VERSION)
+	cd tests/smart-wallet-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
 
 # Generate the Codama IDL from the program's annotations.
 generate-idl:
