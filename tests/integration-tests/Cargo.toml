@@ -26,3 +26,4 @@ spl-tlv-account-resolution = "0.11.4"
 spl-transfer-hook-interface = "2.1"
 sha2 = "0.10"
 wincode = "0.5"
+serde_json = { workspace = true }

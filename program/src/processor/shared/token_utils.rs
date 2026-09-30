@@ -16,9 +16,10 @@ use pinocchio_token_2022::{
     state::TokenAccount as Token2022Account, ID as TOKEN_2022_PROGRAM_ID,
 };
 use spl_token_2022::extension::{
+    confidential_transfer::ConfidentialTransferAccount,
     interest_bearing_mint::InterestBearingConfig, memo_transfer::memo_required,
     non_transferable::NonTransferable, scaled_ui_amount::ScaledUiAmountConfig,
-    transfer_fee::TransferFeeConfig, BaseStateWithExtensions, StateWithExtensions,
+    transfer_fee::TransferFeeConfig, BaseStateWithExtensions, ExtensionType, StateWithExtensions,
 };
 use spl_token_2022::state::{Account as Token2022AccountState, Mint as Token2022MintState};
 
@@ -485,4 +486,26 @@ pub fn transfer_checked_cpi(
         &infos[..total],
         signers,
     )
+}
+
+/// The extension identifies confidential escrow after SwapDvp has closed.
+/// Parse the entire TLV list so malformed extension data cannot bypass the guard.
+#[inline(always)]
+pub fn has_confidential_transfer_account(info: &AccountView) -> Result<bool, ProgramError> {
+    if !info.owned_by(&TOKEN_2022_PROGRAM_ID) {
+        return Ok(false);
+    }
+    let data = info.try_borrow()?;
+    let account = StateWithExtensions::<Token2022AccountState>::unpack(&data)
+        .map_err(|_| ProgramError::InvalidAccountData)?;
+    let types = account
+        .get_extension_types()
+        .map_err(|_| ProgramError::InvalidAccountData)?;
+    if !types.contains(&ExtensionType::ConfidentialTransferAccount) {
+        return Ok(false);
+    }
+    account
+        .get_extension::<ConfidentialTransferAccount>()
+        .map_err(|_| ProgramError::InvalidAccountData)?;
+    Ok(true)
 }
