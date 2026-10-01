@@ -1,6 +1,5 @@
 use crate::{
-    processor::shared::confidential::{check_confidential_swap, check_refund_contexts},
-    processor::shared::confidential_types::LegBRefund,
+    processor::shared::confidential::{check_confidential_swap, check_refund_contexts, LegBRefund},
     require, require_len,
 };
 use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
@@ -100,7 +99,7 @@ mod tests {
             &[5; 64],     // auditor_ciphertext_hi
         ]
         .concat();
-        let transfer = crate::processor::shared::confidential_types::CtTransferData {
+        let transfer = crate::processor::shared::confidential::CtTransferData {
             new_source_decryptable_available_balance: [6; 36],
             auditor_ciphertext_lo: [4; 64],
             auditor_ciphertext_hi: [5; 64],

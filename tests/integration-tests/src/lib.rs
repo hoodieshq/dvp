@@ -1,5 +1,9 @@
 #[cfg(test)]
+mod confidential_utils;
+#[cfg(test)]
 pub mod state_utils;
+#[cfg(test)]
+mod test_confidential_utils;
 #[cfg(test)]
 pub mod utils;
 
