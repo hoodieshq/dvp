@@ -173,7 +173,7 @@ pub fn apply_pending_balance_cpi(
 /// Checks transfer contexts and recipient before the optional memo CPI. Callers
 /// still check the operation's other contexts and amount binding beforehand.
 /// Hook extras preserve writable flags but never receive signer privileges.
-#[inline(always)]
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 pub fn confidential_transfer_cpi(
     from: &AccountView,

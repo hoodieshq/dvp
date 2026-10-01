@@ -36,3 +36,6 @@ mod test_public_abi;
 mod test_apply_confidential_dvp;
 #[cfg(test)]
 mod test_create_confidential_dvp;
+
+#[cfg(test)]
+mod test_settle_confidential_dvp;

@@ -1,10 +1,31 @@
 use crate::{
-    processor::shared::confidential::{
-        check_confidential_swap, check_transfer_contexts, CtTransferData,
+    error::DvpSwapProgramError,
+    processor::shared::{
+        account_check::{verify_account_owner, verify_signer},
+        confidential::{
+            check_confidential_amount, check_confidential_recipient, check_proof_context,
+            check_transfer_contexts, close_proof_context_cpi, confidential_transfer_cpi,
+            empty_confidential_account_if_no_pending, verify_confidential_mint, CtTransferData,
+            ProofType, ZK_ELGAMAL_PROOF_PROGRAM_ID,
+        },
+        token_utils::{
+            get_mint_authority, get_mint_decimals, get_token_account_balance, transfer_checked_cpi,
+            validate_mint_extensions, verify_ata_recipient, verify_ata_recipient_if_initialized,
+            verify_canonical_ata,
+        },
+        utils::split_leg_remaining_accounts,
     },
     require, require_len,
+    state::swap_dvp::ConfidentialSwapDvp,
 };
-use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
+use pinocchio::{
+    account::AccountView,
+    cpi::Signer,
+    error::ProgramError,
+    sysvars::{clock::Clock, Sysvar},
+    Address, ProgramResult,
+};
+use pinocchio_token_2022::{instructions::CloseAccount, ID as TOKEN_2022_PROGRAM_ID};
 
 const FIXED_ACCOUNTS_LEN: usize = 23;
 
@@ -13,8 +34,8 @@ const FIXED_ACCOUNTS_LEN: usize = 23;
 /// Confidential counterpart of [`process_settle_dvp`](super::settle_dvp::process_settle_dvp):
 /// the settlement authority delivers both legs atomically and refunds surplus
 /// to each depositor. Leg B payment proofs bind the transferred amount to the
-/// ciphertexts stored at Create. The swap and asset escrow close; the leg B
-/// escrow stays open if pending or public balances remain, for Apply and Recover.
+/// ciphertexts stored at Create. The swap and leg A escrow close; leg B escrow
+/// stays open if pending or public balances remain, for Apply and Recover.
 /// Pending credits are not applied during settlement.
 ///
 /// # Account Layout
@@ -29,31 +50,41 @@ const FIXED_ACCOUNTS_LEN: usize = 23;
 ///
 /// # Instruction Data
 /// `leg_a_extras_count` (u8), `payment` ([`CtTransferData`]) and `surplus_b`
-/// (`Option<CtTransferData>`), in that order. Payment goes to the seller's
-/// configured leg B destination; any leg B surplus goes to `user_b`'s own ATA.
-///
-/// # Implementation Status
-/// Currently decodes the arguments, checks the account count, optional-context
-/// layout and swap mode, then returns `InvalidInstructionData` without CPIs
-/// or state changes. Authorization and proof validation are not implemented yet.
+/// (`Option<CtTransferData>`), in that order. Payment goes to the configured
+/// leg B settlement destination; any leg B surplus goes to `user_b`'s own ATA.
 pub fn process_settle_confidential_dvp(
     program_id: &Address,
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
     let args = parse_instruction_data(instruction_data)?;
-
     require!(
         accounts.len() >= FIXED_ACCOUNTS_LEN,
         ProgramError::NotEnoughAccountKeys
     );
-    let [_settlement_authority_info, swap_dvp_info, _mint_a_info, _mint_b_info, _dvp_ata_a_info, _dvp_ata_b_info, _user_a_destination_ata_b_info, _user_b_destination_ata_a_info, _user_a_ata_a_info, _user_b_ata_b_info, _token_program_a_info, _token_program_b_info, _memo_program_info, _zk_elgamal_proof_program_info, _payment_equality_context_info, _payment_validity_context_info, _payment_range_context_info, _eq_lo_context_info, _eq_hi_context_info, _zero_context_info, surplus_equality_context_info, surplus_validity_context_info, surplus_range_context_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
+    let swap_dvp_info = &accounts[1];
+    verify_account_owner(swap_dvp_info, program_id)?;
+    let confidential = ConfidentialSwapDvp::load(&swap_dvp_info.try_borrow()?)?;
+    settle(program_id, accounts, &args, &confidential)
+}
+
+// Keep decoded state and arguments in the caller's SBF frame so validation
+// and CPI temporaries fit within the 4096-byte limit of this frame.
+#[inline(never)]
+fn settle(
+    program_id: &Address,
+    accounts: &[AccountView],
+    args: &SettleConfidentialDvpArgs,
+    confidential: &ConfidentialSwapDvp,
+) -> ProgramResult {
+    let (fixed, leg_a_extras, leg_b_extras) =
+        split_leg_remaining_accounts(accounts, &[args.leg_a_extras_count], FIXED_ACCOUNTS_LEN)?;
+    let [settlement_authority_info, swap_dvp_info, mint_a_info, mint_b_info, dvp_ata_a_info, dvp_ata_b_info, user_a_destination_ata_b_info, user_b_destination_ata_a_info, user_a_ata_a_info, user_b_ata_b_info, token_program_a_info, token_program_b_info, memo_program_info, zk_elgamal_proof_program_info, payment_equality_context_info, payment_validity_context_info, payment_range_context_info, eq_lo_context_info, eq_hi_context_info, zero_context_info, surplus_equality_context_info, surplus_validity_context_info, surplus_range_context_info] =
+        fixed
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
-    check_confidential_swap(program_id, swap_dvp_info)?;
     check_transfer_contexts(
         program_id,
         args.surplus.is_some(),
@@ -61,13 +92,242 @@ pub fn process_settle_confidential_dvp(
         surplus_validity_context_info,
         surplus_range_context_info,
     )?;
+    verify_signer(settlement_authority_info, true)?;
+    let dvp = &confidential.base;
+    require!(
+        settlement_authority_info.address() == &dvp.settlement_authority,
+        DvpSwapProgramError::SettlementAuthorityMismatch
+    );
 
-    // Reject before any mutation or CPI until this lifecycle operation is implemented.
-    Err(ProgramError::InvalidInstructionData)
+    // Revalidate the mints and authorities agreed at Create, as in public Settle.
+    require!(
+        mint_a_info.address() == &dvp.mint_a && mint_b_info.address() == &dvp.mint_b,
+        ProgramError::InvalidAccountData
+    );
+    require!(
+        token_program_a_info.address() == &dvp.token_program_a
+            && token_program_b_info.address() == &dvp.token_program_b
+            && token_program_b_info.address() == &TOKEN_2022_PROGRAM_ID
+            && zk_elgamal_proof_program_info.address() == &ZK_ELGAMAL_PROOF_PROGRAM_ID,
+        ProgramError::IncorrectProgramId
+    );
+    require!(
+        mint_a_info.owned_by(&dvp.token_program_a) && mint_b_info.owned_by(&dvp.token_program_b),
+        ProgramError::InvalidAccountOwner
+    );
+    validate_mint_extensions(mint_a_info)?;
+    validate_mint_extensions(mint_b_info)?;
+    verify_confidential_mint(mint_b_info)?;
+    require!(
+        get_mint_authority(mint_a_info)?.unwrap_or_default() == dvp.mint_a_authority
+            && get_mint_authority(mint_b_info)?.unwrap_or_default() == dvp.mint_b_authority,
+        DvpSwapProgramError::MintAuthorityChanged
+    );
+    let now = Clock::get()?.unix_timestamp;
+    require!(now <= dvp.expiry_timestamp, DvpSwapProgramError::DvpExpired);
+    if let Some(earliest) = dvp.earliest_settlement_timestamp {
+        require!(now >= earliest, DvpSwapProgramError::SettlementTooEarly);
+    }
+
+    // Deliveries go to the agreed destinations; surplus goes to the depositors.
+    verify_canonical_ata(
+        dvp_ata_a_info,
+        swap_dvp_info.address(),
+        &dvp.mint_a,
+        token_program_a_info,
+    )?;
+    verify_canonical_ata(
+        dvp_ata_b_info,
+        swap_dvp_info.address(),
+        &dvp.mint_b,
+        token_program_b_info,
+    )?;
+    verify_canonical_ata(
+        user_a_destination_ata_b_info,
+        &dvp.user_a_settlement_destination,
+        &dvp.mint_b,
+        token_program_b_info,
+    )?;
+    verify_ata_recipient(
+        user_a_destination_ata_b_info,
+        &dvp.user_a_settlement_destination,
+        &dvp.mint_b,
+    )?;
+    verify_canonical_ata(
+        user_b_destination_ata_a_info,
+        &dvp.user_b_settlement_destination,
+        &dvp.mint_a,
+        token_program_a_info,
+    )?;
+    verify_ata_recipient(
+        user_b_destination_ata_a_info,
+        &dvp.user_b_settlement_destination,
+        &dvp.mint_a,
+    )?;
+    verify_canonical_ata(
+        user_a_ata_a_info,
+        &dvp.user_a,
+        &dvp.mint_a,
+        token_program_a_info,
+    )?;
+    verify_ata_recipient_if_initialized(user_a_ata_a_info, &dvp.user_a, &dvp.mint_a)?;
+    verify_canonical_ata(
+        user_b_ata_b_info,
+        &dvp.user_b,
+        &dvp.mint_b,
+        token_program_b_info,
+    )?;
+    verify_ata_recipient_if_initialized(user_b_ata_b_info, &dvp.user_b, &dvp.mint_b)?;
+
+    check_confidential_recipient(user_a_destination_ata_b_info)?;
+    if args.surplus.is_some() {
+        check_confidential_recipient(user_b_ata_b_info)?;
+    }
+
+    // Validate every context, including surplus and zero, before the first CPI.
+    // Only real contexts are included; absent surplus placeholders are excluded.
+    let mut contexts = &fixed[14..20];
+    if args.surplus.is_some() {
+        contexts = &fixed[14..23];
+    }
+    let proof_types = [
+        ProofType::CiphertextCommitmentEquality,
+        ProofType::BatchedGroupedCiphertext3HandlesValidity,
+        ProofType::BatchedRangeProofU128,
+        ProofType::CiphertextCiphertextEquality,
+        ProofType::CiphertextCiphertextEquality,
+        ProofType::ZeroCiphertext,
+        ProofType::CiphertextCommitmentEquality,
+        ProofType::BatchedGroupedCiphertext3HandlesValidity,
+        ProofType::BatchedRangeProofU128,
+    ];
+    for (context, kind) in contexts.iter().zip(proof_types) {
+        require!(context.is_writable(), ProgramError::InvalidAccountData);
+        check_proof_context(context, kind, settlement_authority_info.address())?;
+    }
+    check_confidential_amount(
+        dvp_ata_b_info,
+        payment_validity_context_info,
+        eq_lo_context_info,
+        eq_hi_context_info,
+        &confidential.amount_b_ciphertext_lo,
+        &confidential.amount_b_ciphertext_hi,
+        settlement_authority_info.address(),
+    )?;
+
+    // Reading WSOL balance can issue SyncNative, so all proof checks precede it.
+    // Leg B sufficiency is enforced by Token-2022's transfer range proof.
+    let escrow_a_balance = get_token_account_balance(dvp_ata_a_info)?;
+    require!(
+        escrow_a_balance >= dvp.amount_a,
+        DvpSwapProgramError::LegNotFunded
+    );
+    let decimals_a = get_mint_decimals(mint_a_info)?;
+
+    let (nonce_bytes, bump_bytes) = dvp.seed_buffers();
+    let swap_dvp_seeds = dvp.signing_seeds(&nonce_bytes, &bump_bytes);
+    let signer_seeds = [Signer::from(&swap_dvp_seeds)];
+
+    confidential_transfer_cpi(
+        dvp_ata_b_info,
+        mint_b_info,
+        user_a_destination_ata_b_info,
+        swap_dvp_info,
+        payment_equality_context_info,
+        payment_validity_context_info,
+        payment_range_context_info,
+        settlement_authority_info.address(),
+        &args.payment,
+        memo_program_info,
+        leg_b_extras,
+        &signer_seeds,
+    )?;
+    transfer_checked_cpi(
+        dvp_ata_a_info,
+        mint_a_info,
+        user_b_destination_ata_a_info,
+        swap_dvp_info,
+        dvp.amount_a,
+        decimals_a,
+        token_program_a_info.address(),
+        memo_program_info,
+        leg_a_extras,
+        &signer_seeds,
+    )?;
+    let surplus_a = escrow_a_balance - dvp.amount_a;
+    if surplus_a > 0 {
+        transfer_checked_cpi(
+            dvp_ata_a_info,
+            mint_a_info,
+            user_a_ata_a_info,
+            swap_dvp_info,
+            surplus_a,
+            decimals_a,
+            token_program_a_info.address(),
+            memo_program_info,
+            leg_a_extras,
+            &signer_seeds,
+        )?;
+    }
+    if let Some(surplus) = &args.surplus {
+        // As in public Settle, surplus reuses this leg's hook extras.
+        confidential_transfer_cpi(
+            dvp_ata_b_info,
+            mint_b_info,
+            user_b_ata_b_info,
+            swap_dvp_info,
+            surplus_equality_context_info,
+            surplus_validity_context_info,
+            surplus_range_context_info,
+            settlement_authority_info.address(),
+            surplus,
+            memo_program_info,
+            leg_b_extras,
+            &signer_seeds,
+        )?;
+    }
+
+    // Match the post-transfer available balance to zero. Pending credits must
+    // not block settlement, so EmptyAccount runs only when pending is empty.
+    let reset_b = empty_confidential_account_if_no_pending(
+        dvp_ata_b_info,
+        zero_context_info,
+        swap_dvp_info,
+        settlement_authority_info.address(),
+        &signer_seeds,
+    )?;
+    for (context, kind) in contexts.iter().zip(proof_types) {
+        close_proof_context_cpi(context, kind, settlement_authority_info)?;
+    }
+    CloseAccount {
+        account: dvp_ata_a_info,
+        destination: settlement_authority_info,
+        authority: swap_dvp_info,
+        token_program: token_program_a_info.address(),
+    }
+    .invoke_signed(&signer_seeds)?;
+    // MintTo can leave public tokens despite DisableNonConfidentialCredits.
+    // Keep escrow B for user_b to recover after the swap has closed.
+    if reset_b && get_token_account_balance(dvp_ata_b_info)? == 0 {
+        CloseAccount {
+            account: dvp_ata_b_info,
+            destination: settlement_authority_info,
+            authority: swap_dvp_info,
+            token_program: token_program_b_info.address(),
+        }
+        .invoke_signed(&signer_seeds)?;
+    }
+    settlement_authority_info.set_lamports(
+        settlement_authority_info
+            .lamports()
+            .checked_add(swap_dvp_info.lamports())
+            .ok_or(ProgramError::ArithmeticOverflow)?,
+    );
+    swap_dvp_info.set_lamports(0);
+    swap_dvp_info.close()?;
+    Ok(())
 }
 
-// These arguments are consumed by the lifecycle implementation in a later stage.
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 struct SettleConfidentialDvpArgs {
     leg_a_extras_count: u8,

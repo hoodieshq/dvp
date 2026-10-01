@@ -145,7 +145,7 @@ pub fn context_account<T: bytemuck::Pod + ZkProofData<U>, U: bytemuck::Pod>(
     keypair.pubkey()
 }
 
-fn transfer_contexts(
+pub fn transfer_contexts(
     context: &mut TestContext,
     authority: &Pubkey,
     proof: &TransferProofData,
@@ -465,6 +465,7 @@ pub struct ConfidentialDvpFixture {
     pub user_b: Keypair,
     pub authority: Keypair,
     pub keys: Keys,
+    pub amount_b_openings: [PedersenOpening; 2],
     pub accounts: CreateConfidentialDvp,
     pub args: CreateConfidentialDvpInstructionArgs,
 }
@@ -487,6 +488,7 @@ impl ConfidentialDvpFixture {
             nonce,
         );
         let keys = Keys::new();
+        let amount_b_openings = [PedersenOpening::new_rand(), PedersenOpening::new_rand()];
         let args = CreateConfidentialDvpInstructionArgs {
             amount_a: AMOUNT_A,
             expiry_timestamp: context.now() + 3600,
@@ -494,12 +496,12 @@ impl ConfidentialDvpFixture {
             amount_b_ciphertext_lo: keys
                 .elgamal
                 .pubkey()
-                .encrypt(AMOUNT_B & ((1 << LO_BITS) - 1))
+                .encrypt_with(AMOUNT_B & ((1 << LO_BITS) - 1), &amount_b_openings[0])
                 .to_bytes(),
             amount_b_ciphertext_hi: keys
                 .elgamal
                 .pubkey()
-                .encrypt(AMOUNT_B >> LO_BITS)
+                .encrypt_with(AMOUNT_B >> LO_BITS, &amount_b_openings[1])
                 .to_bytes(),
             decryptable_zero_balance: keys.balance(0).0,
             pubkey_validity_proof_offset: -1,
@@ -530,6 +532,7 @@ impl ConfidentialDvpFixture {
             user_b,
             authority,
             keys,
+            amount_b_openings,
             accounts,
             args,
         }
@@ -568,7 +571,7 @@ impl ConfidentialDvpFixture {
 
     pub fn close_fixture(&self, context: &mut TestContext) {
         // Only the live swap is removed. Keep its real tombstone and CT escrow.
-        // Actual terminal-instruction -> Apply coverage belongs to stages 5-6.
+        // Real Settle -> Apply is covered by the settlement tests.
         context
             .svm
             .set_account(self.accounts.swap_dvp, Account::default())
