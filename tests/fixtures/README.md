@@ -43,5 +43,7 @@ The pinned Token-2022 binary differs from the old bundled fixture: a
 assert that `RejectDvp` and `RecoverDvp` fail atomically in this state. They
 do not prove that this adversarial state is reachable through real token
 instructions. The old tests' guarantee that these refunds always succeed
-does not hold for these bytes; reachability and refund policy need separate
-review before relying on that guarantee.
+does not hold for these bytes. Separate empty-leg tests model mint A recreated
+under legacy SPL with its old escrow empty: Reject skips the leg A transfer,
+refunds B and closes the trade; user_b can also Reclaim B independently. These
+tests cover the refund behavior without proving a full close-and-recreate flow.

@@ -5,6 +5,7 @@ use solana_clock::Clock;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_nullable::MaybeNull;
+use solana_packet::PACKET_DATA_SIZE;
 use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_pubkey::pubkey;
@@ -198,7 +199,12 @@ impl TestContext {
             &all_signers,
             self.svm.latest_blockhash(),
         );
-        assert!(wincode::serialize(&tx).unwrap().len() <= 1232);
+        let size = wincode::serialize(&tx).map_err(|e| e.to_string())?.len();
+        if size > PACKET_DATA_SIZE {
+            return Err(format!(
+                "transaction size {size} exceeds limit {PACKET_DATA_SIZE}"
+            ));
+        }
         self.svm
             .send_transaction(tx)
             .map_err(|e| format!("{:?}", e))
@@ -908,4 +914,31 @@ pub fn set_mint_2022_with_confidential_transfer(
             ext.auditor_elgamal_pubkey = Default::default();
         });
     write_account(context, mint, data, TOKEN_2022_PROGRAM_ID, 1_000_000_000);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn send_rejects_oversized_transaction() {
+        let mut context = TestContext::new();
+        let ix = Instruction {
+            program_id: MEMO_PROGRAM_ID,
+            accounts: vec![],
+            data: vec![b'a'; PACKET_DATA_SIZE],
+        };
+        let tx = Transaction::new_signed_with_payer(
+            std::slice::from_ref(&ix),
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            context.svm.latest_blockhash(),
+        );
+        let size = wincode::serialize(&tx).unwrap().len();
+
+        assert_eq!(
+            context.send(ix, &[]).unwrap_err(),
+            format!("transaction size {size} exceeds limit {PACKET_DATA_SIZE}")
+        );
+    }
 }
