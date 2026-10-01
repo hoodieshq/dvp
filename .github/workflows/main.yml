@@ -1,0 +1,120 @@
+# Workspace tests and generated client consistency.
+name: Main
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOLANA_CLI_VERSION: 4.2.2
+  CARGO_BUILD_SBF_VERSION: 4.1.0
+
+jobs:
+  rust:
+    name: Rust
+    needs: generation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain components
+        run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: generated-clients
+          path: clients
+
+      - name: Install Solana CLI and cargo-build-sbf
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://release.anza.xyz/v${SOLANA_CLI_VERSION}/install" -o "$RUNNER_TEMP/install-agave.sh"
+          sh "$RUNNER_TEMP/install-agave.sh"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Verify cargo-build-sbf version
+        run: test "$(cargo-build-sbf --version | head -n 1)" = "cargo-build-sbf ${CARGO_BUILD_SBF_VERSION}"
+
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Build program
+        run: make build-sbf build-hook-fixture build-smart-wallet-fixture
+
+      - name: Cache pinned test programs
+        id: test-programs
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/fixtures/spl_token_2022.so
+            tests/fixtures/spl_record.so
+          key: test-programs-${{ hashFiles('tests/fixtures/SHA256SUMS') }}
+      - name: Fetch pinned test programs
+        if: steps.test-programs.outputs.cache-hit != 'true'
+        run: make fetch-test-fixtures
+      - name: Verify pinned test programs
+        run: make check-test-fixtures
+      # Integration tests embed these binaries at compile time.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Test
+        env:
+          RUST_LOG: error
+        run: cargo test --workspace --all-features
+
+  generation:
+    name: Generated clients
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain components
+        run: rustup component add rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Generate IDL and clients
+        run: make generate-clients
+      - name: Check generated files
+        run: |
+          generated_changes=$(git status --porcelain --untracked-files=all -- idl/dvp_swap_program.json clients/rust clients/typescript)
+          printf '%s\n' "$generated_changes"
+          test -z "$generated_changes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: generated-clients
+          path: |
+            clients/rust/src/generated
+            clients/typescript/src/generated
+          if-no-files-found: error
+
+  js:
+    name: JS
+    needs: generation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: generated-clients
+          path: clients
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:unit
+      - run: pnpm build
