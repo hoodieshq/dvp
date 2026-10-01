@@ -31,3 +31,8 @@ mod test_modes;
 
 #[cfg(test)]
 mod test_public_abi;
+
+#[cfg(test)]
+mod test_apply_confidential_dvp;
+#[cfg(test)]
+mod test_create_confidential_dvp;

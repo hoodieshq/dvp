@@ -1,9 +1,14 @@
-//! Real-proof setup for the PDA fixture. Key derivation and transaction packing
-//! belong to the client stage; these tests use random keys and one proof per tx.
+//! Shared setup for confidential lifecycle and PDA fixture tests.
+//! Key derivation and transaction packing belong to the client stage; these
+//! tests use random keys and one proof per tx.
 use std::{mem::size_of, num::NonZeroI8};
 
+use dvp_swap_program_client::instructions::{
+    ApplyConfidentialDvpBuilder, CreateConfidentialDvp, CreateConfidentialDvpInstructionArgs,
+};
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
-use solana_instruction::{AccountMeta, Instruction};
+use solana_account::Account;
+use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::{v1, VersionedMessage};
 use solana_pubkey::{pubkey, Pubkey};
@@ -40,9 +45,13 @@ use spl_token_confidential_transfer_proof_generation::{
     try_combine_lo_hi_ciphertexts, try_split_u64,
 };
 
-use crate::utils::{
-    create_ata, set_hook_extra_account_metas, TestContext, HOOK_FIXTURE_PROGRAM_ID,
-    MEMO_PROGRAM_ID, TOKEN_2022_PROGRAM_ID as TOKEN,
+use crate::{
+    state_utils::{AMOUNT_A, AMOUNT_B},
+    utils::{
+        create_ata, dvp_ata, nonce_tombstone_pda, set_hook_extra_account_metas, set_mint,
+        swap_dvp_pda, TestContext, HOOK_FIXTURE_PROGRAM_ID, MEMO_PROGRAM_ID,
+        TOKEN_2022_PROGRAM_ID as TOKEN, TOKEN_PROGRAM_ID,
+    },
 };
 
 pub const FIXTURE: Pubkey = pubkey!("FCDHD6mkL4c7hMLxdLy2a9aCjraYJJwpF6gnbukwHRV5");
@@ -165,7 +174,7 @@ fn transfer_contexts(
     ]
 }
 
-fn create_wallet_account(
+pub fn create_wallet_account(
     context: &mut TestContext,
     wallet: &Keypair,
     mint: &Pubkey,
@@ -199,6 +208,7 @@ fn create_wallet_account(
     address
 }
 
+/// A funded escrow owned by the CPI test program, ready for proof/helper tests.
 pub struct ConfidentialTransferTestContext {
     pub context: TestContext,
     pub mint: Pubkey,
@@ -225,52 +235,7 @@ impl ConfidentialTransferTestContext {
                 include_bytes!("../../../target/deploy/confidential_transfer_fixture.so"),
             )
             .unwrap();
-        let mint = Keypair::new();
-        let mut extensions = vec![ExtensionType::ConfidentialTransferMint];
-        if hook {
-            extensions.push(ExtensionType::TransferHook);
-        }
-        let space = ExtensionType::try_calculate_account_len::<Mint>(&extensions).unwrap();
-        let mut instructions = vec![
-            solana_system_interface::instruction::create_account(
-                &context.payer.pubkey(),
-                &mint.pubkey(),
-                context.svm.minimum_balance_for_rent_exemption(space),
-                space as u64,
-                &TOKEN,
-            ),
-            ct_ix::initialize_mint(
-                &TOKEN,
-                &mint.pubkey(),
-                Some(context.payer.pubkey()),
-                true,
-                None,
-            )
-            .unwrap(),
-        ];
-        if hook {
-            instructions.push(
-                spl_token_2022_interface::extension::transfer_hook::instruction::initialize(
-                    &TOKEN,
-                    &mint.pubkey(),
-                    Some(context.payer.pubkey()),
-                    Some(HOOK_FIXTURE_PROGRAM_ID),
-                )
-                .unwrap(),
-            );
-        }
-        instructions.push(
-            token_ix::initialize_mint(
-                &TOKEN,
-                &mint.pubkey(),
-                &context.payer.pubkey(),
-                None,
-                DECIMALS,
-            )
-            .unwrap(),
-        );
-        send_v1(&mut context, &instructions, &[&mint]).unwrap();
-        let mint = mint.pubkey();
+        let mint = create_confidential_mint(&mut context, true, hook);
         let source_owner = Keypair::new();
         let source_keys = Keys::new();
         let source = create_wallet_account(&mut context, &source_owner, &mint, &source_keys);
@@ -351,79 +316,17 @@ impl ConfidentialTransferTestContext {
 
     /// Ordinary wallet CT funding, including a credit arriving after proof prep.
     pub fn fund(&mut self, amount: u64) {
-        let before = state(&self.context, &self.source);
-        let instructions = [
-            token_ix::mint_to(
-                &TOKEN,
-                &self.mint,
-                &self.source,
-                &self.context.payer.pubkey(),
-                &[],
-                amount,
-            )
-            .unwrap(),
-            ct_ix::deposit(
-                &TOKEN,
-                &self.source,
-                &self.mint,
-                amount,
-                DECIMALS,
-                &self.source_owner.pubkey(),
-                &[],
-            )
-            .unwrap(),
-            ct_ix::apply_pending_balance(
-                &TOKEN,
-                &self.source,
-                u64::from(before.pending_balance_credit_counter) + 1,
-                &self.source_keys.balance(amount),
-                &self.source_owner.pubkey(),
-                &[],
-            )
-            .unwrap(),
-        ];
-        send_v1(&mut self.context, &instructions, &[&self.source_owner]).unwrap();
-        let source = state(&self.context, &self.source);
-        let proof = transfer_split_proof_data(
-            &source.available_balance.try_into().unwrap(),
-            &source.decryptable_available_balance.try_into().unwrap(),
-            amount,
-            &self.source_keys.elgamal,
-            &self.source_keys.ae,
-            self.escrow_keys.elgamal.pubkey(),
-            None,
-        )
-        .unwrap();
-        let [equality, validity, range] =
-            transfer_contexts(&mut self.context, &self.source_owner.pubkey(), &proof);
-        let ciphertext = &proof.ciphertext_validity_proof_data_with_ciphertext;
-        let mut instructions = ct_ix::transfer(
-            &TOKEN,
-            &self.source,
+        let instructions = prepare_funding_transfer(
+            &mut self.context,
             &self.mint,
+            &self.source_owner,
+            &self.source,
+            &self.source_keys,
             &self.escrow,
-            &self.source_keys.balance(0),
-            &ciphertext.ciphertext_lo,
-            &ciphertext.ciphertext_hi,
-            &self.source_owner.pubkey(),
-            &[],
-            ProofLocation::ContextStateAccount(&equality),
-            ProofLocation::ContextStateAccount(&validity),
-            ProofLocation::ContextStateAccount(&range),
-        )
-        .unwrap();
-        instructions[0].accounts.extend_from_slice(&self.extras);
-        for account in [equality, validity, range] {
-            instructions.push(
-                solana_zk_elgamal_proof_interface::instruction::close_context_state(
-                    ContextStateInfo {
-                        context_state_account: &account,
-                        context_state_authority: &self.source_owner.pubkey(),
-                    },
-                    &self.context.payer.pubkey(),
-                ),
-            );
-        }
+            &self.escrow_keys,
+            amount,
+            &self.extras,
+        );
         send_v1(&mut self.context, &instructions, &[&self.source_owner]).unwrap();
     }
 
@@ -554,4 +457,279 @@ impl ConfidentialTransferTestContext {
 pub struct Payment {
     pub instruction: Instruction,
     pub contexts: [Pubkey; 6],
+}
+
+/// Inputs for the real DvP program; the swap and escrows are created explicitly.
+pub struct ConfidentialDvpFixture {
+    pub user_a: Keypair,
+    pub user_b: Keypair,
+    pub authority: Keypair,
+    pub keys: Keys,
+    pub accounts: CreateConfidentialDvp,
+    pub args: CreateConfidentialDvpInstructionArgs,
+}
+
+impl ConfidentialDvpFixture {
+    pub fn new(context: &mut TestContext, auto_approve: bool, hook: bool) -> Self {
+        let user_a = Keypair::new();
+        let user_b = Keypair::new();
+        let authority = Keypair::new();
+        let mint_a = Pubkey::new_unique();
+        set_mint(context, &mint_a, &TOKEN_PROGRAM_ID);
+        let mint_b = create_confidential_mint(context, auto_approve, hook);
+        let nonce = 42;
+        let (swap, _) = swap_dvp_pda(
+            &authority.pubkey(),
+            &user_a.pubkey(),
+            &user_b.pubkey(),
+            &mint_a,
+            &mint_b,
+            nonce,
+        );
+        let keys = Keys::new();
+        let args = CreateConfidentialDvpInstructionArgs {
+            amount_a: AMOUNT_A,
+            expiry_timestamp: context.now() + 3600,
+            nonce,
+            amount_b_ciphertext_lo: keys
+                .elgamal
+                .pubkey()
+                .encrypt(AMOUNT_B & ((1 << LO_BITS) - 1))
+                .to_bytes(),
+            amount_b_ciphertext_hi: keys
+                .elgamal
+                .pubkey()
+                .encrypt(AMOUNT_B >> LO_BITS)
+                .to_bytes(),
+            decryptable_zero_balance: keys.balance(0).0,
+            pubkey_validity_proof_offset: -1,
+            ref_string: None,
+            user_a_settlement_destination: None,
+            user_b_settlement_destination: None,
+            earliest_settlement_timestamp: None,
+        };
+        let accounts = CreateConfidentialDvp {
+            payer: context.payer.pubkey(),
+            swap_dvp: swap,
+            nonce_tombstone: nonce_tombstone_pda(&swap).0,
+            settlement_authority: authority.pubkey(),
+            user_a: user_a.pubkey(),
+            user_b: user_b.pubkey(),
+            mint_a,
+            mint_b,
+            dvp_ata_a: dvp_ata(&swap, &mint_a, &TOKEN_PROGRAM_ID),
+            dvp_ata_b: dvp_ata(&swap, &mint_b, &TOKEN),
+            token_program_a: TOKEN_PROGRAM_ID,
+            token_program_b: TOKEN,
+            instructions_sysvar: solana_sdk_ids::sysvar::instructions::ID,
+            system_program: solana_sdk_ids::system_program::ID,
+            associated_token_program: spl_associated_token_account_interface::program::ID,
+        };
+        Self {
+            user_a,
+            user_b,
+            authority,
+            keys,
+            accounts,
+            args,
+        }
+    }
+
+    pub fn create_instructions(&self) -> [Instruction; 2] {
+        let proof = build_pubkey_validity_proof_data(&self.keys.elgamal).unwrap();
+        [
+            ProofInstruction::VerifyPubkeyValidity.encode_verify_proof(None, &proof),
+            self.accounts.instruction(self.args.clone()),
+        ]
+    }
+
+    pub fn apply(&self, signer: Pubkey, amount: u64) -> ApplyConfidentialDvpBuilder {
+        let mut builder = ApplyConfidentialDvpBuilder::new();
+        builder
+            .signer(signer)
+            .swap_dvp(self.accounts.swap_dvp)
+            .nonce_tombstone(self.accounts.nonce_tombstone)
+            .dvp_ata_b(self.accounts.dvp_ata_b)
+            .token_program(TOKEN)
+            .expected_pending_balance_credit_counter(1)
+            .new_decryptable_available_balance(self.keys.balance(amount).0)
+            .settlement_authority(self.authority.pubkey())
+            .user_a(self.user_a.pubkey())
+            .user_b(self.user_b.pubkey())
+            .mint_a(self.accounts.mint_a)
+            .mint_b(self.accounts.mint_b)
+            .nonce(self.args.nonce);
+        builder
+    }
+
+    pub fn create(&self, context: &mut TestContext) {
+        send_v1(context, &self.create_instructions(), &[]).unwrap();
+    }
+
+    pub fn close_fixture(&self, context: &mut TestContext) {
+        // Only the live swap is removed. Keep its real tombstone and CT escrow.
+        // Actual terminal-instruction -> Apply coverage belongs to stages 5-6.
+        context
+            .svm
+            .set_account(self.accounts.swap_dvp, Account::default())
+            .unwrap();
+    }
+}
+
+pub fn assert_error(
+    context: &mut TestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    instruction_index: u8,
+    expected: InstructionError,
+) {
+    let err = send_v1(context, instructions, signers).unwrap_err();
+    assert_eq!(
+        format!("{:?}", err.err),
+        format!("InstructionError({instruction_index}, {expected:?})"),
+        "{:?}",
+        err.meta.logs
+    );
+}
+
+pub fn create_confidential_mint(
+    context: &mut TestContext,
+    auto_approve: bool,
+    hook: bool,
+) -> Pubkey {
+    let mint = Keypair::new();
+    let mut extensions = vec![ExtensionType::ConfidentialTransferMint];
+    if hook {
+        extensions.push(ExtensionType::TransferHook);
+    }
+    let space = ExtensionType::try_calculate_account_len::<Mint>(&extensions).unwrap();
+    let mut instructions = vec![
+        solana_system_interface::instruction::create_account(
+            &context.payer.pubkey(),
+            &mint.pubkey(),
+            context.svm.minimum_balance_for_rent_exemption(space),
+            space as u64,
+            &TOKEN,
+        ),
+        ct_ix::initialize_mint(
+            &TOKEN,
+            &mint.pubkey(),
+            Some(context.payer.pubkey()),
+            auto_approve,
+            None,
+        )
+        .unwrap(),
+    ];
+    if hook {
+        instructions.push(
+            spl_token_2022_interface::extension::transfer_hook::instruction::initialize(
+                &TOKEN,
+                &mint.pubkey(),
+                Some(context.payer.pubkey()),
+                Some(HOOK_FIXTURE_PROGRAM_ID),
+            )
+            .unwrap(),
+        );
+    }
+    instructions.push(
+        token_ix::initialize_mint(
+            &TOKEN,
+            &mint.pubkey(),
+            &context.payer.pubkey(),
+            None,
+            DECIMALS,
+        )
+        .unwrap(),
+    );
+    send_v1(context, &instructions, &[&mint]).unwrap();
+    mint.pubkey()
+}
+
+/// Funds a wallet's available balance and prepares a real CT transfer plus proof cleanup.
+/// The caller submits it separately so rejection and retry can be tested.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_funding_transfer(
+    context: &mut TestContext,
+    mint: &Pubkey,
+    source_owner: &Keypair,
+    source_address: &Pubkey,
+    source_keys: &Keys,
+    destination: &Pubkey,
+    destination_keys: &Keys,
+    amount: u64,
+    extras: &[AccountMeta],
+) -> Vec<Instruction> {
+    let before = state(context, source_address);
+    let instructions = [
+        token_ix::mint_to(
+            &TOKEN,
+            mint,
+            source_address,
+            &context.payer.pubkey(),
+            &[],
+            amount,
+        )
+        .unwrap(),
+        ct_ix::deposit(
+            &TOKEN,
+            source_address,
+            mint,
+            amount,
+            DECIMALS,
+            &source_owner.pubkey(),
+            &[],
+        )
+        .unwrap(),
+        ct_ix::apply_pending_balance(
+            &TOKEN,
+            source_address,
+            u64::from(before.pending_balance_credit_counter) + 1,
+            &source_keys.balance(amount),
+            &source_owner.pubkey(),
+            &[],
+        )
+        .unwrap(),
+    ];
+    send_v1(context, &instructions, &[source_owner]).unwrap();
+    let source = state(context, source_address);
+    let proof = transfer_split_proof_data(
+        &source.available_balance.try_into().unwrap(),
+        &source.decryptable_available_balance.try_into().unwrap(),
+        amount,
+        &source_keys.elgamal,
+        &source_keys.ae,
+        destination_keys.elgamal.pubkey(),
+        None,
+    )
+    .unwrap();
+    let [equality, validity, range] = transfer_contexts(context, &source_owner.pubkey(), &proof);
+    let ciphertext = &proof.ciphertext_validity_proof_data_with_ciphertext;
+    let mut instructions = ct_ix::transfer(
+        &TOKEN,
+        source_address,
+        mint,
+        destination,
+        &source_keys.balance(0),
+        &ciphertext.ciphertext_lo,
+        &ciphertext.ciphertext_hi,
+        &source_owner.pubkey(),
+        &[],
+        ProofLocation::ContextStateAccount(&equality),
+        ProofLocation::ContextStateAccount(&validity),
+        ProofLocation::ContextStateAccount(&range),
+    )
+    .unwrap();
+    instructions[0].accounts.extend_from_slice(extras);
+    for account in [equality, validity, range] {
+        instructions.push(
+            solana_zk_elgamal_proof_interface::instruction::close_context_state(
+                ContextStateInfo {
+                    context_state_account: &account,
+                    context_state_authority: &source_owner.pubkey(),
+                },
+                &context.payer.pubkey(),
+            ),
+        );
+    }
+    instructions
 }
