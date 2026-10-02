@@ -1,8 +1,21 @@
 use crate::{
-    processor::shared::confidential::{check_confidential_swap, check_refund_contexts, LegBRefund},
+    error::DvpSwapProgramError,
+    processor::shared::{
+        account_check::{verify_account_owner, verify_signer},
+        confidential::{
+            check_confidential_refund, check_refund_contexts, refund_confidential_leg, LegBRefund,
+            ZK_ELGAMAL_PROOF_PROGRAM_ID,
+        },
+        token_utils::{
+            get_mint_decimals, get_token_account_balance, transfer_checked_cpi,
+            verify_ata_recipient_if_initialized, verify_canonical_ata, MAX_HOOK_REMAINING_ACCOUNTS,
+        },
+    },
     require,
+    state::swap_dvp::ConfidentialSwapDvp,
 };
-use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
+use pinocchio::{account::AccountView, cpi::Signer, error::ProgramError, Address, ProgramResult};
+use pinocchio_token_2022::ID as TOKEN_2022_PROGRAM_ID;
 
 const FIXED_ACCOUNTS_LEN: usize = 12;
 
@@ -27,39 +40,122 @@ const FIXED_ACCOUNTS_LEN: usize = 12;
 /// `user_a` supplies `None`. For `user_b`, `None` withdraws the public balance
 /// only when the confidential available balance has been reset.
 ///
-/// # Implementation Status
-/// Currently decodes the arguments, checks the account count, optional-context
-/// layout and swap mode, then returns `InvalidInstructionData` without CPIs
-/// or state changes. Authorization and proof validation are not implemented yet.
 pub fn process_reclaim_confidential_dvp(
     program_id: &Address,
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
     let args = parse_instruction_data(instruction_data)?;
-
     require!(
         accounts.len() >= FIXED_ACCOUNTS_LEN,
         ProgramError::NotEnoughAccountKeys
     );
-    let [_signer_info, swap_dvp_info, _mint_info, _dvp_source_ata_info, _signer_dest_ata_info, _token_program_info, _memo_program_info, _zk_elgamal_proof_program_info, equality_context_info, validity_context_info, range_context_info, zero_context_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
+    verify_account_owner(&accounts[1], program_id)?;
+    let confidential = ConfidentialSwapDvp::load(&accounts[1].try_borrow()?)?;
+    reclaim(program_id, accounts, &args.leg_b_refund, &confidential)
+}
+
+// Keep decoded state and transfer arguments out of the CPI execution frame.
+#[inline(never)]
+fn reclaim(
+    program_id: &Address,
+    accounts: &[AccountView],
+    refund: &LegBRefund,
+    confidential: &ConfidentialSwapDvp,
+) -> ProgramResult {
+    let (fixed, remaining) = accounts.split_at(FIXED_ACCOUNTS_LEN);
+    let [signer, swap, mint, escrow, destination, token, memo, zk_program, equality, validity, range, zero] =
+        fixed
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-
-    check_confidential_swap(program_id, swap_dvp_info)?;
-    check_refund_contexts(
-        program_id,
-        &args.leg_b_refund,
-        equality_context_info,
-        validity_context_info,
-        range_context_info,
-        zero_context_info,
-    )?;
-
-    // Reject before any mutation or CPI until this lifecycle operation is implemented.
-    Err(ProgramError::InvalidInstructionData)
+    require!(
+        remaining.len() <= MAX_HOOK_REMAINING_ACCOUNTS,
+        ProgramError::InvalidArgument
+    );
+    verify_signer(signer, true)?;
+    let dvp = &confidential.base;
+    let is_leg_a = signer.address() == &dvp.user_a;
+    let (leg_mint, leg_token) = if is_leg_a {
+        require!(
+            matches!(refund, LegBRefund::None),
+            ProgramError::InvalidInstructionData
+        );
+        (&dvp.mint_a, &dvp.token_program_a)
+    } else {
+        require!(
+            signer.address() == &dvp.user_b,
+            DvpSwapProgramError::SignerNotParty
+        );
+        require!(
+            token.address() == &TOKEN_2022_PROGRAM_ID,
+            ProgramError::IncorrectProgramId
+        );
+        (&dvp.mint_b, &dvp.token_program_b)
+    };
+    require!(mint.address() == leg_mint, ProgramError::InvalidAccountData);
+    require!(
+        token.address() == leg_token,
+        ProgramError::IncorrectProgramId
+    );
+    verify_canonical_ata(escrow, swap.address(), leg_mint, token)?;
+    verify_canonical_ata(destination, signer.address(), leg_mint, token)?;
+    verify_ata_recipient_if_initialized(destination, signer.address(), leg_mint)?;
+    let contexts = &fixed[8..];
+    if is_leg_a {
+        require!(
+            zk_program.address() == &ZK_ELGAMAL_PROOF_PROGRAM_ID,
+            ProgramError::IncorrectProgramId
+        );
+        check_refund_contexts(program_id, refund, equality, validity, range, zero)?;
+    } else {
+        check_confidential_refund(
+            program_id,
+            refund,
+            escrow,
+            destination,
+            signer,
+            zk_program,
+            contexts,
+        )?;
+    }
+    let (nonce_bytes, bump_bytes) = dvp.seed_buffers();
+    let seeds = dvp.signing_seeds(&nonce_bytes, &bump_bytes);
+    let signers = [Signer::from(&seeds)];
+    // None on leg B requires a reset available balance, but pending credits
+    // may remain. Only the public balance is withdrawn in this mode.
+    if matches!(refund, LegBRefund::None) {
+        let amount = get_token_account_balance(escrow)?;
+        if amount > 0 {
+            transfer_checked_cpi(
+                escrow,
+                mint,
+                destination,
+                swap,
+                amount,
+                get_mint_decimals(mint)?,
+                token.address(),
+                memo,
+                remaining,
+                &signers,
+            )?;
+        }
+    } else {
+        refund_confidential_leg(
+            refund,
+            escrow,
+            mint,
+            destination,
+            swap,
+            signer,
+            memo,
+            contexts,
+            remaining,
+            &signers,
+        )?;
+    }
+    // Reclaim leaves the swap and both escrows open for funding again.
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]

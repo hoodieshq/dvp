@@ -4,8 +4,13 @@
 use std::{mem::size_of, num::NonZeroI8};
 
 use dvp_swap_program_client::instructions::{
-    ApplyConfidentialDvpBuilder, CreateConfidentialDvp, CreateConfidentialDvpInstructionArgs,
+    ApplyConfidentialDvpBuilder, CancelConfidentialDvp, CancelConfidentialDvpInstructionArgs,
+    CreateConfidentialDvp, CreateConfidentialDvpInstructionArgs, ReclaimConfidentialDvp,
+    ReclaimConfidentialDvpInstructionArgs, RecoverConfidentialDvp,
+    RecoverConfidentialDvpInstructionArgs, RejectConfidentialDvp,
+    RejectConfidentialDvpInstructionArgs,
 };
+use dvp_swap_program_client::types::{CtTransferData, LegBRefund};
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use solana_account::Account;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -34,7 +39,8 @@ use solana_zk_sdk_pod::encryption::auth_encryption::PodAeCiphertext;
 use spl_token_2022_interface::{
     extension::{
         confidential_transfer::{instruction as ct_ix, ConfidentialTransferAccount},
-        BaseStateWithExtensions, ExtensionType, StateWithExtensions,
+        BaseStateWithExtensions, BaseStateWithExtensionsMut, ExtensionType, StateWithExtensions,
+        StateWithExtensionsMut,
     },
     instruction as token_ix,
     state::{Account as TokenAccount, Mint},
@@ -48,9 +54,9 @@ use spl_token_confidential_transfer_proof_generation::{
 use crate::{
     state_utils::{AMOUNT_A, AMOUNT_B},
     utils::{
-        create_ata, dvp_ata, nonce_tombstone_pda, set_hook_extra_account_metas, set_mint,
-        swap_dvp_pda, TestContext, HOOK_FIXTURE_PROGRAM_ID, MEMO_PROGRAM_ID,
-        TOKEN_2022_PROGRAM_ID as TOKEN, TOKEN_PROGRAM_ID,
+        create_ata, dvp_ata, fund_wallet_ata, hook_extras_for_mint, nonce_tombstone_pda,
+        set_hook_extra_account_metas, set_mint, swap_dvp_pda, TestContext, HOOK_FIXTURE_PROGRAM_ID,
+        MEMO_PROGRAM_ID, TOKEN_2022_PROGRAM_ID as TOKEN, TOKEN_PROGRAM_ID,
     },
 };
 
@@ -735,4 +741,425 @@ pub fn prepare_funding_transfer(
         );
     }
     instructions
+}
+
+pub fn setup_refund(
+    context: &mut TestContext,
+    amount_a: u64,
+    amount_b: u64,
+    hook: bool,
+) -> (ConfidentialDvpFixture, Keys) {
+    let f = ConfidentialDvpFixture::new(context, true, hook);
+    f.create(context);
+    let source_a = fund_wallet_ata(
+        context,
+        &f.user_a,
+        &f.accounts.mint_a,
+        amount_a,
+        &TOKEN_PROGRAM_ID,
+    );
+    if amount_a > 0 {
+        let ix = spl_token_interface::instruction::transfer_checked(
+            &TOKEN_PROGRAM_ID,
+            &source_a,
+            &f.accounts.mint_a,
+            &f.accounts.dvp_ata_a,
+            &f.user_a.pubkey(),
+            &[],
+            amount_a,
+            DECIMALS,
+        )
+        .unwrap();
+        send_v1(context, &[ix], &[&f.user_a]).unwrap();
+    }
+    let keys = Keys::new();
+    create_wallet_account(context, &f.user_b, &f.accounts.mint_b, &keys);
+    if hook {
+        set_hook_extra_account_metas(context, &f.accounts.mint_b, &[]);
+    }
+    if amount_b > 0 {
+        fund_b(context, &f, &keys, amount_b, hook);
+        send_v1(
+            context,
+            &[f.apply(f.user_b.pubkey(), amount_b).instruction()],
+            &[&f.user_b],
+        )
+        .unwrap();
+    }
+    (f, keys)
+}
+
+pub fn fund_b(
+    context: &mut TestContext,
+    f: &ConfidentialDvpFixture,
+    keys: &Keys,
+    amount: u64,
+    hook: bool,
+) {
+    let extras = if hook {
+        hook_extras_for_mint(&f.accounts.mint_b)
+    } else {
+        vec![]
+    };
+    let ixs = prepare_funding_transfer(
+        context,
+        &f.accounts.mint_b,
+        &f.user_b,
+        &dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
+        keys,
+        &f.accounts.dvp_ata_b,
+        &f.keys,
+        amount,
+        &extras,
+    );
+    send_v1(context, &ixs, &[&f.user_b]).unwrap();
+}
+
+// A third party can credit pending without reading or signing the swap.
+pub fn fund_late_b(context: &mut TestContext, f: &ConfidentialDvpFixture, amount: u64) {
+    let donor = Keypair::new();
+    let keys = Keys::new();
+    let source = create_wallet_account(context, &donor, &f.accounts.mint_b, &keys);
+    let instructions = prepare_funding_transfer(
+        context,
+        &f.accounts.mint_b,
+        &donor,
+        &source,
+        &keys,
+        &f.accounts.dvp_ata_b,
+        &f.keys,
+        amount,
+        &[],
+    );
+    send_v1(context, &instructions, &[&donor]).unwrap();
+}
+
+pub fn mint_public(context: &mut TestContext, f: &ConfidentialDvpFixture, amount: u64) {
+    let ix = token_ix::mint_to(
+        &TOKEN,
+        &f.accounts.mint_b,
+        &f.accounts.dvp_ata_b,
+        &context.payer.pubkey(),
+        &[],
+        amount,
+    )
+    .unwrap();
+    send_v1(context, &[ix], &[]).unwrap();
+}
+
+pub struct Refund {
+    pub mode: LegBRefund,
+    pub contexts: [Option<Pubkey>; 4],
+}
+impl Refund {
+    pub fn none() -> Self {
+        Self {
+            mode: LegBRefund::None,
+            contexts: [None; 4],
+        }
+    }
+}
+
+pub fn prepare_refund(
+    context: &mut TestContext,
+    f: &ConfidentialDvpFixture,
+    keys: &Keys,
+    signer: Pubkey,
+    balance: u64,
+    amount: u64,
+    full: bool,
+) -> Refund {
+    let available: ElGamalCiphertext = state(context, &f.accounts.dvp_ata_b)
+        .available_balance
+        .try_into()
+        .unwrap();
+    let proof = transfer_split_proof_data(
+        &available,
+        &f.keys.balance(balance).try_into().unwrap(),
+        amount,
+        &f.keys.elgamal,
+        &f.keys.ae,
+        keys.elgamal.pubkey(),
+        None,
+    )
+    .unwrap();
+    let [equality, validity, range] = transfer_contexts(context, &signer, &proof);
+    let ct = &proof.ciphertext_validity_proof_data_with_ciphertext;
+    let data = CtTransferData {
+        new_source_decryptable_available_balance: f.keys.balance(balance - amount).0,
+        auditor_ciphertext_lo: ct.ciphertext_lo.0,
+        auditor_ciphertext_hi: ct.ciphertext_hi.0,
+    };
+    let zero = if full {
+        let ctx = ct.proof_data.context_data();
+        let lo = ctx
+            .grouped_ciphertext_lo
+            .try_extract_ciphertext(0)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let hi = ctx
+            .grouped_ciphertext_hi
+            .try_extract_ciphertext(0)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let remaining = available - try_combine_lo_hi_ciphertexts(&lo, &hi, LO_BITS).unwrap();
+        let proof = build_zero_ciphertext_proof_data(&f.keys.elgamal, &remaining).unwrap();
+        Some(context_account(
+            context,
+            &signer,
+            ProofInstruction::VerifyZeroCiphertext,
+            &proof,
+        ))
+    } else {
+        None
+    };
+    Refund {
+        mode: if full {
+            LegBRefund::Full(data)
+        } else {
+            LegBRefund::Partial(data)
+        },
+        contexts: [Some(equality), Some(validity), Some(range), zero],
+    }
+}
+
+pub fn terminal(
+    f: &ConfidentialDvpFixture,
+    signer: Pubkey,
+    refund: &Refund,
+    cancel: bool,
+    extras: &[AccountMeta],
+) -> Instruction {
+    let [equality_context, validity_context, range_context, zero_context] = refund.contexts;
+    let accounts = CancelConfidentialDvp {
+        settlement_authority: signer,
+        swap_dvp: f.accounts.swap_dvp,
+        mint_a: f.accounts.mint_a,
+        mint_b: f.accounts.mint_b,
+        dvp_ata_a: f.accounts.dvp_ata_a,
+        dvp_ata_b: f.accounts.dvp_ata_b,
+        user_a_ata_a: dvp_ata(&f.user_a.pubkey(), &f.accounts.mint_a, &TOKEN_PROGRAM_ID),
+        user_b_ata_b: dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
+        token_program_a: TOKEN_PROGRAM_ID,
+        token_program_b: TOKEN,
+        memo_program: MEMO_PROGRAM_ID,
+        zk_elgamal_proof_program: ZK,
+        equality_context,
+        validity_context,
+        range_context,
+        zero_context,
+    };
+    if cancel {
+        accounts.instruction_with_remaining_accounts(
+            CancelConfidentialDvpInstructionArgs {
+                leg_a_extras_count: 0,
+                leg_b_refund: refund.mode.clone(),
+            },
+            extras,
+        )
+    } else {
+        RejectConfidentialDvp {
+            signer,
+            swap_dvp: accounts.swap_dvp,
+            mint_a: accounts.mint_a,
+            mint_b: accounts.mint_b,
+            dvp_ata_a: accounts.dvp_ata_a,
+            dvp_ata_b: accounts.dvp_ata_b,
+            user_a_ata_a: accounts.user_a_ata_a,
+            user_b_ata_b: accounts.user_b_ata_b,
+            token_program_a: accounts.token_program_a,
+            token_program_b: accounts.token_program_b,
+            memo_program: accounts.memo_program,
+            zk_elgamal_proof_program: ZK,
+            equality_context,
+            validity_context,
+            range_context,
+            zero_context,
+        }
+        .instruction_with_remaining_accounts(
+            RejectConfidentialDvpInstructionArgs {
+                leg_a_extras_count: 0,
+                leg_b_refund: refund.mode.clone(),
+            },
+            extras,
+        )
+    }
+}
+
+pub fn reclaim(
+    f: &ConfidentialDvpFixture,
+    leg_a: bool,
+    refund: &Refund,
+    extras: &[AccountMeta],
+) -> Instruction {
+    let [equality_context, validity_context, range_context, zero_context] = refund.contexts;
+    let (signer, mint, escrow, token) = if leg_a {
+        (
+            f.user_a.pubkey(),
+            f.accounts.mint_a,
+            f.accounts.dvp_ata_a,
+            TOKEN_PROGRAM_ID,
+        )
+    } else {
+        (
+            f.user_b.pubkey(),
+            f.accounts.mint_b,
+            f.accounts.dvp_ata_b,
+            TOKEN,
+        )
+    };
+    ReclaimConfidentialDvp {
+        signer,
+        swap_dvp: f.accounts.swap_dvp,
+        mint,
+        dvp_source_ata: escrow,
+        signer_dest_ata: dvp_ata(&signer, &mint, &token),
+        token_program: token,
+        memo_program: MEMO_PROGRAM_ID,
+        zk_elgamal_proof_program: ZK,
+        equality_context,
+        validity_context,
+        range_context,
+        zero_context,
+    }
+    .instruction_with_remaining_accounts(
+        ReclaimConfidentialDvpInstructionArgs {
+            leg_b_refund: refund.mode.clone(),
+        },
+        extras,
+    )
+}
+
+pub fn recover(f: &ConfidentialDvpFixture, refund: &Refund, extras: &[AccountMeta]) -> Instruction {
+    let [equality_context, validity_context, range_context, zero_context] = refund.contexts;
+    RecoverConfidentialDvp {
+        signer: f.user_b.pubkey(),
+        swap_dvp: f.accounts.swap_dvp,
+        nonce_tombstone: f.accounts.nonce_tombstone,
+        mint: f.accounts.mint_b,
+        dvp_escrow_ata: f.accounts.dvp_ata_b,
+        signer_dest_ata: dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
+        token_program: TOKEN,
+        memo_program: MEMO_PROGRAM_ID,
+        zk_elgamal_proof_program: ZK,
+        equality_context,
+        validity_context,
+        range_context,
+        zero_context,
+    }
+    .instruction_with_remaining_accounts(
+        RecoverConfidentialDvpInstructionArgs {
+            settlement_authority: f.authority.pubkey(),
+            user_a: f.user_a.pubkey(),
+            user_b: f.user_b.pubkey(),
+            mint_a: f.accounts.mint_a,
+            mint_b: f.accounts.mint_b,
+            nonce: f.args.nonce,
+            leg_b_refund: refund.mode.clone(),
+        },
+        extras,
+    )
+}
+
+pub fn assert_failure(
+    context: &mut TestContext,
+    ix: Instruction,
+    signer: &Keypair,
+    expected: InstructionError,
+    before_cpi: bool,
+) {
+    let before: Vec<_> = ix
+        .accounts
+        .iter()
+        .filter(|a| a.is_writable)
+        .map(|a| (a.pubkey, context.get_account(&a.pubkey)))
+        .collect();
+    let signers = if ix.accounts[0].is_signer {
+        vec![signer]
+    } else {
+        vec![]
+    };
+    let failure = send_v1(context, &[ix], &signers).unwrap_err();
+    assert_eq!(
+        format!("{:?}", failure.err),
+        format!("InstructionError(0, {expected:?})"),
+        "{:?}",
+        failure.meta.logs
+    );
+    if before_cpi {
+        assert!(
+            !failure.meta.logs.iter().any(|s| s.contains("invoke [2]")),
+            "{:?}",
+            failure.meta.logs
+        );
+    }
+    for (key, account) in before {
+        assert_eq!(context.get_account(&key), account, "{key}");
+    }
+}
+
+pub fn assert_contexts_closed(context: &TestContext, refund: &Refund) {
+    for key in refund.contexts.iter().flatten() {
+        assert!(context.get_account(key).is_none());
+    }
+}
+
+pub fn available(context: &TestContext, f: &ConfidentialDvpFixture) -> u64 {
+    let ct: ElGamalCiphertext = state(context, &f.accounts.dvp_ata_b)
+        .available_balance
+        .try_into()
+        .unwrap();
+    ct.decrypt_u32(f.keys.elgamal.secret()).unwrap()
+}
+
+pub fn mutate_ct(
+    context: &mut TestContext,
+    address: Pubkey,
+    change: impl FnOnce(&mut ConfidentialTransferAccount),
+) {
+    let mut account = context.get_account(&address).unwrap();
+    let mut state = StateWithExtensionsMut::<TokenAccount>::unpack(&mut account.data).unwrap();
+    change(
+        state
+            .get_extension_mut::<ConfidentialTransferAccount>()
+            .unwrap(),
+    );
+    context.svm.set_account(address, account).unwrap();
+}
+
+/// Applies two pending credits of 2^47 each, producing a balance of 2^48.
+pub fn setup_large_refund(
+    context: &mut TestContext,
+    closed_swap: bool,
+) -> (ConfidentialDvpFixture, Keys, u64) {
+    let (f, keys) = setup_refund(context, 0, 0, false);
+    let credit = 1u64 << 47;
+    fund_b(context, &f, &keys, credit, false);
+    fund_b(context, &f, &keys, credit, false);
+    // Recover starts with a real closed swap and unapplied pending balance.
+    if closed_swap {
+        send_v1(
+            context,
+            &[terminal(
+                &f,
+                f.authority.pubkey(),
+                &Refund::none(),
+                true,
+                &[],
+            )],
+            &[&f.authority],
+        )
+        .unwrap();
+    }
+    send_v1(
+        context,
+        &[f.apply(f.user_b.pubkey(), credit * 2)
+            .expected_pending_balance_credit_counter(2)
+            .instruction()],
+        &[&f.user_b],
+    )
+    .unwrap();
+    (f, keys, credit * 2)
 }

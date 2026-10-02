@@ -39,3 +39,12 @@ mod test_create_confidential_dvp;
 
 #[cfg(test)]
 mod test_settle_confidential_dvp;
+
+#[cfg(test)]
+mod test_cancel_confidential_dvp;
+#[cfg(test)]
+mod test_reclaim_confidential_dvp;
+#[cfg(test)]
+mod test_recover_confidential_dvp;
+#[cfg(test)]
+mod test_reject_confidential_dvp;
