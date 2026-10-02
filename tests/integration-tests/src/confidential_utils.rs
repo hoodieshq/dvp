@@ -18,7 +18,7 @@ use solana_keypair::Keypair;
 use solana_message::{v1, VersionedMessage};
 use solana_pubkey::{pubkey, Pubkey};
 use solana_signer::Signer;
-use solana_transaction::versioned::VersionedTransaction;
+use solana_transaction::{versioned::VersionedTransaction, TransactionError};
 use solana_zk_elgamal_proof_interface::{
     instruction::{ContextStateInfo, ProofInstruction},
     proof_data::ZkProofData,
@@ -27,7 +27,7 @@ use solana_zk_elgamal_proof_interface::{
 use solana_zk_sdk::{
     encryption::{
         auth_encryption::AeKey,
-        elgamal::{ElGamalCiphertext, ElGamalKeypair},
+        elgamal::{ElGamalCiphertext, ElGamalKeypair, ElGamalPubkey},
         pedersen::PedersenOpening,
     },
     zk_elgamal_proof_program::{
@@ -38,7 +38,9 @@ use solana_zk_sdk::{
 use solana_zk_sdk_pod::encryption::auth_encryption::PodAeCiphertext;
 use spl_token_2022_interface::{
     extension::{
-        confidential_transfer::{instruction as ct_ix, ConfidentialTransferAccount},
+        confidential_transfer::{
+            instruction as ct_ix, ConfidentialTransferAccount, ConfidentialTransferMint,
+        },
         BaseStateWithExtensions, BaseStateWithExtensionsMut, ExtensionType, StateWithExtensions,
         StateWithExtensionsMut,
     },
@@ -87,7 +89,19 @@ pub fn send_v1(
     all_signers.extend_from_slice(signers);
     let transaction =
         VersionedTransaction::try_new(VersionedMessage::V1(message), &all_signers).unwrap();
-    assert!(wincode::serialize(&transaction).unwrap().len() <= 4096);
+    let size = wincode::serialize(&transaction).unwrap().len();
+    if size > v1::MAX_TRANSACTION_SIZE {
+        return Err(Box::new(FailedTransactionMetadata {
+            err: TransactionError::SanitizeFailure,
+            meta: TransactionMetadata {
+                logs: vec![format!(
+                    "Transaction size {size} exceeds v1 limit {}",
+                    v1::MAX_TRANSACTION_SIZE
+                )],
+                ..TransactionMetadata::default()
+            },
+        }));
+    }
     context.svm.send_transaction(transaction).map_err(Box::new)
 }
 
@@ -708,7 +722,7 @@ pub fn prepare_funding_transfer(
         &source_keys.elgamal,
         &source_keys.ae,
         destination_keys.elgamal.pubkey(),
-        None,
+        mint_auditor(context, mint).as_ref(),
     )
     .unwrap();
     let [equality, validity, range] = transfer_contexts(context, &source_owner.pubkey(), &proof);
@@ -880,7 +894,7 @@ pub fn prepare_refund(
         &f.keys.elgamal,
         &f.keys.ae,
         keys.elgamal.pubkey(),
-        None,
+        mint_auditor(context, &f.accounts.mint_b).as_ref(),
     )
     .unwrap();
     let [equality, validity, range] = transfer_contexts(context, &signer, &proof);
@@ -940,9 +954,13 @@ pub fn terminal(
         mint_b: f.accounts.mint_b,
         dvp_ata_a: f.accounts.dvp_ata_a,
         dvp_ata_b: f.accounts.dvp_ata_b,
-        user_a_ata_a: dvp_ata(&f.user_a.pubkey(), &f.accounts.mint_a, &TOKEN_PROGRAM_ID),
+        user_a_ata_a: dvp_ata(
+            &f.user_a.pubkey(),
+            &f.accounts.mint_a,
+            &f.accounts.token_program_a,
+        ),
         user_b_ata_b: dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
-        token_program_a: TOKEN_PROGRAM_ID,
+        token_program_a: f.accounts.token_program_a,
         token_program_b: TOKEN,
         memo_program: MEMO_PROGRAM_ID,
         zk_elgamal_proof_program: ZK,
@@ -1162,4 +1180,35 @@ pub fn setup_large_refund(
     )
     .unwrap();
     (f, keys, credit * 2)
+}
+
+pub fn mint_auditor(context: &TestContext, mint: &Pubkey) -> Option<ElGamalPubkey> {
+    let account = context.get_account(mint).unwrap();
+    let mint = StateWithExtensions::<Mint>::unpack(&account.data).unwrap();
+    Option::from(
+        mint.get_extension::<ConfidentialTransferMint>()
+            .unwrap()
+            .auditor_elgamal_pubkey,
+    )
+    .map(|key: solana_zk_sdk_pod::encryption::elgamal::PodElGamalPubkey| key.try_into().unwrap())
+}
+
+pub fn set_mint_auditor(context: &mut TestContext, mint: &Pubkey, auditor: &ElGamalPubkey) {
+    let account = context.get_account(mint).unwrap();
+    let mint_state = StateWithExtensions::<Mint>::unpack(&account.data).unwrap();
+    let auto_approve = mint_state
+        .get_extension::<ConfidentialTransferMint>()
+        .unwrap()
+        .auto_approve_new_accounts
+        .into();
+    let ix = ct_ix::update_mint(
+        &TOKEN,
+        mint,
+        &context.payer.pubkey(),
+        &[],
+        auto_approve,
+        Some((*auditor).into()),
+    )
+    .unwrap();
+    send_v1(context, &[ix], &[]).unwrap();
 }

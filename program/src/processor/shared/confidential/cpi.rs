@@ -250,7 +250,8 @@ pub fn confidential_transfer_cpi(
 /// Checks the post-transfer available balance against the zero proof, then
 /// resets it only if both pending ciphertexts are all-zero bytes. Returns
 /// whether EmptyAccount ran; public token balance must also be zero to close.
-#[inline(always)]
+// Keep the decoded CT state and CPI buffers in a separate SBF frame.
+#[inline(never)]
 pub fn empty_confidential_account_if_no_pending(
     escrow: &AccountView,
     zero: &AccountView,

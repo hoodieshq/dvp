@@ -1,8 +1,8 @@
 use crate::{
     confidential_utils::{
-        assert_contexts_closed, assert_failure, available, context_account, mutate_ct, pending,
-        prepare_refund, recover, send_v1, setup_large_refund, setup_refund, terminal, Refund,
-        LO_BITS,
+        assert_contexts_closed, assert_failure, available, context_account, fund_b, mutate_ct,
+        pending, prepare_refund, recover, send_v1, set_mint_auditor, setup_large_refund,
+        setup_refund, terminal, Refund, LO_BITS,
     },
     state_utils::AMOUNT_A,
     utils::{
@@ -317,4 +317,51 @@ fn handles_two_credits_of_two_to_the_47() {
     send_v1(&mut context, &[ix], &[&f.user_b]).unwrap();
     assert_contexts_closed(&context, &full);
     assert!(context.get_account(&f.accounts.dvp_ata_b).is_none());
+}
+
+#[test]
+fn full_refund_with_mint_auditor_closes_escrows_and_proofs() {
+    let mut context = TestContext::new();
+    let (f, keys) = setup_refund(&mut context, 0, 0, false);
+    let auditor = solana_zk_sdk::encryption::elgamal::ElGamalKeypair::new_rand();
+    set_mint_auditor(&mut context, &f.accounts.mint_b, auditor.pubkey());
+    fund_b(&mut context, &f, &keys, AMOUNT_B, false);
+    send_v1(
+        &mut context,
+        &[f.apply(f.user_b.pubkey(), AMOUNT_B).instruction()],
+        &[&f.user_b],
+    )
+    .unwrap();
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        f.authority.pubkey(),
+        AMOUNT_B,
+        AMOUNT_B,
+        true,
+    );
+    send_v1(
+        &mut context,
+        &[terminal(&f, f.authority.pubkey(), &refund, true, &[])],
+        &[&f.authority],
+    )
+    .unwrap();
+    assert_contexts_closed(&context, &refund);
+    assert_eq!(
+        pending(
+            &context,
+            &dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
+            &keys
+        ),
+        AMOUNT_B
+    );
+    for address in [
+        f.accounts.swap_dvp,
+        f.accounts.dvp_ata_a,
+        f.accounts.dvp_ata_b,
+    ] {
+        assert!(context.get_account(&address).is_none());
+    }
+    assert!(context.get_account(&f.accounts.nonce_tombstone).is_some());
 }

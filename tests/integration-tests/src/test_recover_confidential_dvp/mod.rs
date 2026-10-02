@@ -347,7 +347,15 @@ fn reclaim_reject_and_recover_forward_hook_extras_for_ct_refunds() {
     );
     let missing = reclaim(&f, false, &partial, &[]);
     let before = context.get_account(&f.accounts.dvp_ata_b);
-    assert!(send_v1(&mut context, &[missing], &[&f.user_b]).is_err());
+    let failure = send_v1(&mut context, &[missing], &[&f.user_b]).unwrap_err();
+    assert_eq!(
+        failure.err,
+        solana_transaction::TransactionError::InstructionError(0, InstructionError::MissingAccount)
+    );
+    assert!(failure
+        .meta
+        .logs
+        .contains(&format!("Program {TOKEN} invoke [2]")));
     assert_eq!(context.get_account(&f.accounts.dvp_ata_b), before);
     send_v1(
         &mut context,

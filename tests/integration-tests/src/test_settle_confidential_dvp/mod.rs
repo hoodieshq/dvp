@@ -1,8 +1,9 @@
 //! Real confidential settlement proofs, deliveries, surplus and post-close balances.
 use crate::{
     confidential_utils::{
-        context_account, create_wallet_account, pending, prepare_funding_transfer, send_v1, state,
-        transfer_contexts, ConfidentialDvpFixture, Keys, DECIMALS, LO_BITS, ZK,
+        assert_contexts_closed, context_account, create_wallet_account, fund_b, mint_auditor,
+        pending, prepare_funding_transfer, prepare_refund, reclaim, send_v1, set_mint_auditor,
+        state, transfer_contexts, ConfidentialDvpFixture, Keys, DECIMALS, LO_BITS, ZK,
     },
     state_utils::AMOUNT_A,
     utils::{
@@ -223,7 +224,7 @@ fn prepare_transfer(
         &f.keys.elgamal,
         &f.keys.ae,
         destination.elgamal.pubkey(),
-        None,
+        mint_auditor(context, &f.accounts.mint_b).as_ref(),
     )
     .unwrap();
     let contexts = transfer_contexts(context, &f.authority.pubkey(), &proof);
@@ -747,7 +748,18 @@ fn hooked_payment_and_surplus_each_receive_a_preceding_memo() {
         );
         // Missing hook extras fail after entering Token-2022; all DvP state rolls back.
         let before = context.get_account(&accounts.dvp_ata_b);
-        assert!(send_v1(&mut context, &[ix.clone()], &[&f.authority]).is_err());
+        let failure = send_v1(&mut context, &[ix.clone()], &[&f.authority]).unwrap_err();
+        assert_eq!(
+            failure.err,
+            solana_transaction::TransactionError::InstructionError(
+                0,
+                InstructionError::MissingAccount
+            )
+        );
+        assert!(failure
+            .meta
+            .logs
+            .contains(&format!("Program {TOKEN} invoke [2]")));
         assert_eq!(context.get_account(&accounts.dvp_ata_b), before);
         ix.accounts.extend(hook_extras_for_mint(&accounts.mint_b));
         let result = send_v1(&mut context, &[ix], &[&f.authority]).unwrap();
@@ -1118,4 +1130,144 @@ fn validates_proofs_before_syncing_and_settling_native_leg_a() {
     assert!(context
         .get_account(&accounts.dvp_ata_a)
         .is_none_or(|a| a.lamports == 0));
+}
+
+#[test]
+fn partial_reclaim_reduces_large_surplus_before_settlement() {
+    const SURPLUS: u64 = 1 << 48;
+    let mut context = TestContext::new();
+    let (f, mut accounts, destination_keys, refund_keys) = setup(&mut context, 0, 0, false, false);
+    // Each incoming transfer fits Token-2022's 48-bit limit; their sum does not.
+    for _ in 0..2 {
+        fund_b(&mut context, &f, &refund_keys, SURPLUS / 2, false);
+    }
+    send_v1(
+        &mut context,
+        &[f.apply(f.user_b.pubkey(), AMOUNT_B + SURPLUS)
+            .expected_pending_balance_credit_counter(2)
+            .instruction()],
+        &[&f.user_b],
+    )
+    .unwrap();
+    let swap_before = context.get_account(&accounts.swap_dvp);
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &refund_keys,
+        f.user_b.pubkey(),
+        AMOUNT_B + SURPLUS,
+        1,
+        false,
+    );
+    send_v1(
+        &mut context,
+        &[reclaim(&f, false, &refund, &[])],
+        &[&f.user_b],
+    )
+    .unwrap();
+    assert_contexts_closed(&context, &refund);
+    assert_eq!(context.get_account(&accounts.swap_dvp), swap_before);
+    assert_eq!(pending(&context, &accounts.user_b_ata_b, &refund_keys), 1);
+    // Prepare new proofs against the post-reclaim balance and the unchanged payment.
+    let ix = prepare_settle(
+        &mut context,
+        &f,
+        &mut accounts,
+        &destination_keys,
+        &refund_keys,
+        Some(SURPLUS - 1),
+    );
+    let proofs: Vec<_> = ix.accounts[PAYMENT_CONTEXTS_START..FIXED_ACCOUNTS_LEN]
+        .iter()
+        .map(|a| a.pubkey)
+        .collect();
+    send_v1(&mut context, &[ix], &[&f.authority]).unwrap();
+    assert_eq!(
+        pending(
+            &context,
+            &accounts.user_a_destination_ata_b,
+            &destination_keys
+        ),
+        AMOUNT_B
+    );
+    assert_eq!(
+        pending(&context, &accounts.user_b_ata_b, &refund_keys),
+        SURPLUS
+    );
+    assert_eq!(
+        get_token_balance(&context, &accounts.user_b_destination_ata_a),
+        AMOUNT_A
+    );
+    for address in [accounts.swap_dvp, accounts.dvp_ata_a, accounts.dvp_ata_b]
+        .into_iter()
+        .chain(proofs)
+    {
+        assert!(context.get_account(&address).is_none());
+    }
+    assert!(context.get_account(&f.accounts.nonce_tombstone).is_some());
+}
+
+#[test]
+fn auditor_payment_and_surplus_reject_mismatched_ciphertext_atomically() {
+    use borsh::BorshDeserialize;
+    let mut context = TestContext::new();
+    let f = ConfidentialDvpFixture::new(&mut context, true, false);
+    let auditor = solana_zk_sdk::encryption::elgamal::ElGamalKeypair::new_rand();
+    set_mint_auditor(&mut context, &f.accounts.mint_b, auditor.pubkey());
+    let (f, mut accounts, destination_keys, refund_keys) =
+        setup_fixture(&mut context, f, 0, 9, false, false);
+    let ix = prepare_settle(
+        &mut context,
+        &f,
+        &mut accounts,
+        &destination_keys,
+        &refund_keys,
+        Some(9),
+    );
+    let args = SettleConfidentialDvpInstructionArgs::try_from_slice(&ix.data[1..]).unwrap();
+    for (data, amount) in [
+        (&args.payment, AMOUNT_B),
+        (args.surplus_b.as_ref().unwrap(), 9),
+    ] {
+        let lo = ElGamalCiphertext::from_bytes(&data.auditor_ciphertext_lo).unwrap();
+        let hi = ElGamalCiphertext::from_bytes(&data.auditor_ciphertext_hi).unwrap();
+        assert_eq!(
+            lo.decrypt_u32(auditor.secret()).unwrap()
+                + (hi.decrypt_u32(auditor.secret()).unwrap() << LO_BITS),
+            amount
+        );
+    }
+    // Corrupt each transfer separately; a surplus failure must also undo payment.
+    for surplus in [false, true] {
+        let mut bad = args.clone();
+        let transfer = if surplus {
+            bad.surplus_b.as_mut().unwrap()
+        } else {
+            &mut bad.payment
+        };
+        transfer.auditor_ciphertext_lo = auditor.pubkey().encrypt(1u64).to_bytes();
+        assert_failure(
+            &mut context,
+            &f,
+            accounts.instruction(bad),
+            InstructionError::Custom(
+                spl_token_2022_interface::error::TokenError::ConfidentialTransferBalanceMismatch
+                    as u32,
+            ),
+            false,
+        );
+    }
+    send_v1(&mut context, &[ix], &[&f.authority]).unwrap();
+    assert_eq!(
+        pending(
+            &context,
+            &accounts.user_a_destination_ata_b,
+            &destination_keys
+        ),
+        AMOUNT_B
+    );
+    assert_eq!(pending(&context, &accounts.user_b_ata_b, &refund_keys), 9);
+    for address in [accounts.swap_dvp, accounts.dvp_ata_a, accounts.dvp_ata_b] {
+        assert!(context.get_account(&address).is_none());
+    }
 }

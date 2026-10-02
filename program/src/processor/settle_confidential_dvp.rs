@@ -186,22 +186,35 @@ fn settle(
 
     // Validate every context, including surplus and zero, before the first CPI.
     // Only real contexts are included; absent surplus placeholders are excluded.
-    let mut contexts = &fixed[14..20];
-    if args.surplus.is_some() {
-        contexts = &fixed[14..23];
-    }
-    let proof_types = [
-        ProofType::CiphertextCommitmentEquality,
-        ProofType::BatchedGroupedCiphertext3HandlesValidity,
-        ProofType::BatchedRangeProofU128,
-        ProofType::CiphertextCiphertextEquality,
-        ProofType::CiphertextCiphertextEquality,
-        ProofType::ZeroCiphertext,
-        ProofType::CiphertextCommitmentEquality,
-        ProofType::BatchedGroupedCiphertext3HandlesValidity,
-        ProofType::BatchedRangeProofU128,
+    let required_contexts = [
+        (
+            payment_equality_context_info,
+            ProofType::CiphertextCommitmentEquality,
+        ),
+        (
+            payment_validity_context_info,
+            ProofType::BatchedGroupedCiphertext3HandlesValidity,
+        ),
+        (payment_range_context_info, ProofType::BatchedRangeProofU128),
+        (eq_lo_context_info, ProofType::CiphertextCiphertextEquality),
+        (eq_hi_context_info, ProofType::CiphertextCiphertextEquality),
+        (zero_context_info, ProofType::ZeroCiphertext),
     ];
-    for (context, kind) in contexts.iter().zip(proof_types) {
+    let surplus_contexts = [
+        (
+            surplus_equality_context_info,
+            ProofType::CiphertextCommitmentEquality,
+        ),
+        (
+            surplus_validity_context_info,
+            ProofType::BatchedGroupedCiphertext3HandlesValidity,
+        ),
+        (surplus_range_context_info, ProofType::BatchedRangeProofU128),
+    ];
+    let contexts = required_contexts
+        .iter()
+        .chain(surplus_contexts.iter().filter(|_| args.surplus.is_some()));
+    for &(context, kind) in contexts.clone() {
         require!(context.is_writable(), ProgramError::InvalidAccountData);
         check_proof_context(context, kind, settlement_authority_info.address())?;
     }
@@ -296,7 +309,7 @@ fn settle(
         settlement_authority_info.address(),
         &signer_seeds,
     )?;
-    for (context, kind) in contexts.iter().zip(proof_types) {
+    for &(context, kind) in contexts {
         close_proof_context_cpi(context, kind, settlement_authority_info)?;
     }
     CloseAccount {

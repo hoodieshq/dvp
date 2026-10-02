@@ -293,7 +293,13 @@ fn create_requires_confidential_mint_and_valid_proof() {
         accounts: vec![],
         data: b"not a proof".to_vec(),
     };
-    assert!(send_v1(&mut context, &instructions, &[]).is_err());
+    assert_error(
+        &mut context,
+        &instructions,
+        &[],
+        1,
+        InstructionError::InvalidInstructionData,
+    );
     for address in [
         f.accounts.swap_dvp,
         f.accounts.nonce_tombstone,

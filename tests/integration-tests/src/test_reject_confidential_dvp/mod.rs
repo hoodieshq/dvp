@@ -1,12 +1,13 @@
 use crate::{
     confidential_utils::{
         assert_contexts_closed, assert_failure, available, fund_b, mint_public, pending,
-        prepare_refund, recover, send_v1, setup_large_refund, setup_refund, terminal, Refund,
-        LO_BITS,
+        prepare_refund, recover, send_v1, setup_large_refund, setup_refund, terminal,
+        ConfidentialDvpFixture, Refund, DECIMALS, LO_BITS,
     },
     state_utils::AMOUNT_A,
     utils::{
-        dvp_ata, get_token_balance, TestContext, TOKEN_2022_PROGRAM_ID as TOKEN, TOKEN_PROGRAM_ID,
+        dvp_ata, get_token_balance, nonce_tombstone_pda, swap_dvp_pda, TestContext,
+        TOKEN_2022_PROGRAM_ID as TOKEN, TOKEN_PROGRAM_ID,
     },
 };
 use dvp_swap_program_client::DvpSwapProgramError as Error;
@@ -140,10 +141,6 @@ fn none_closes_empty_escrow_b_but_preserves_pending_and_public_tokens() {
         if public > 0 {
             mint_public(&mut context, &f, public);
         }
-        // A closed/recreated mint must not block unwinding its empty old escrow.
-        let mut mint_a = context.get_account(&f.accounts.mint_a).unwrap();
-        mint_a.owner = TOKEN;
-        context.svm.set_account(f.accounts.mint_a, mint_a).unwrap();
         // Unfunded leg A needs no destination account.
         let destination_a = dvp_ata(&f.user_a.pubkey(), &f.accounts.mint_a, &TOKEN_PROGRAM_ID);
         context
@@ -249,4 +246,104 @@ fn handles_two_credits_of_two_to_the_47() {
     send_v1(&mut context, &[ix], &[&f.user_b]).unwrap();
     assert_contexts_closed(&context, &full);
     assert!(context.get_account(&f.accounts.dvp_ata_b).is_none());
+}
+
+#[test]
+fn none_unwinds_empty_escrow_after_real_mint_close_and_recreation() {
+    use solana_keypair::Keypair;
+    use solana_program_pack::Pack;
+    use spl_token_2022_interface::{
+        extension::ExtensionType, instruction as token_ix, state::Mint,
+    };
+
+    let mut context = TestContext::new();
+    let mut f = ConfidentialDvpFixture::new(&mut context, true, false);
+    let mint = Keypair::new();
+    let payer = context.payer.pubkey();
+    let space =
+        ExtensionType::try_calculate_account_len::<Mint>(&[ExtensionType::MintCloseAuthority])
+            .unwrap();
+    let rent = context.svm.minimum_balance_for_rent_exemption(space);
+    send_v1(
+        &mut context,
+        &[
+            solana_system_interface::instruction::create_account(
+                &payer,
+                &mint.pubkey(),
+                rent,
+                space as u64,
+                &TOKEN,
+            ),
+            token_ix::initialize_mint_close_authority(&TOKEN, &mint.pubkey(), Some(&payer))
+                .unwrap(),
+            token_ix::initialize_mint2(&TOKEN, &mint.pubkey(), &payer, None, DECIMALS).unwrap(),
+        ],
+        &[&mint],
+    )
+    .unwrap();
+    f.accounts.mint_a = mint.pubkey();
+    f.accounts.token_program_a = TOKEN;
+    let swap = swap_dvp_pda(
+        &f.authority.pubkey(),
+        &f.user_a.pubkey(),
+        &f.user_b.pubkey(),
+        &mint.pubkey(),
+        &f.accounts.mint_b,
+        f.args.nonce,
+    )
+    .0;
+    f.accounts.swap_dvp = swap;
+    f.accounts.nonce_tombstone = nonce_tombstone_pda(&swap).0;
+    f.accounts.dvp_ata_a = dvp_ata(&swap, &mint.pubkey(), &TOKEN);
+    f.accounts.dvp_ata_b = dvp_ata(&swap, &f.accounts.mint_b, &TOKEN);
+    f.create(&mut context);
+    send_v1(
+        &mut context,
+        &[token_ix::close_account(&TOKEN, &mint.pubkey(), &payer, &payer, &[]).unwrap()],
+        &[],
+    )
+    .unwrap();
+    assert!(context.get_account(&mint.pubkey()).is_none());
+    let rent = context.svm.minimum_balance_for_rent_exemption(Mint::LEN);
+    send_v1(
+        &mut context,
+        &[
+            solana_system_interface::instruction::create_account(
+                &payer,
+                &mint.pubkey(),
+                rent,
+                Mint::LEN as u64,
+                &TOKEN_PROGRAM_ID,
+            ),
+            spl_token_interface::instruction::initialize_mint2(
+                &TOKEN_PROGRAM_ID,
+                &mint.pubkey(),
+                &payer,
+                None,
+                DECIMALS,
+            )
+            .unwrap(),
+        ],
+        &[&mint],
+    )
+    .unwrap();
+    assert_eq!(
+        context.get_account(&mint.pubkey()).unwrap().owner,
+        TOKEN_PROGRAM_ID
+    );
+    // The old empty ATA is still owned by Token-2022 and can be closed without its mint.
+    assert_eq!(
+        context.get_account(&f.accounts.dvp_ata_a).unwrap().owner,
+        TOKEN
+    );
+    send_v1(
+        &mut context,
+        &[terminal(&f, f.user_a.pubkey(), &Refund::none(), false, &[])],
+        &[&f.user_a],
+    )
+    .unwrap();
+    for address in [swap, f.accounts.dvp_ata_a, f.accounts.dvp_ata_b] {
+        assert!(context.get_account(&address).is_none());
+    }
+    assert!(context.get_account(&f.accounts.nonce_tombstone).is_some());
 }
