@@ -8,8 +8,8 @@ const FIXED_ACCOUNTS_LEN: usize = 15;
 /// Processes the CreateConfidentialDvp instruction.
 ///
 /// Confidential counterpart of [`process_create_dvp`](super::create_dvp::process_create_dvp):
-/// creates a swap with a public asset leg and an encrypted cash amount, and
-/// configures the Token-2022 cash escrow for confidential transfers.
+/// creates a swap with a public leg A and an encrypted leg B amount, and
+/// configures the Token-2022 leg B escrow for confidential transfers.
 ///
 /// # Account Layout
 /// Accounts 0-13 follow the public Create layout. `mint_b` must support
@@ -19,7 +19,7 @@ const FIXED_ACCOUNTS_LEN: usize = 15;
 ///
 /// # Instruction Data
 /// `amount_a`, `expiry_timestamp` and `nonce` are followed by the low and high
-/// ciphertexts of the agreed cash amount, `decryptable_zero_balance` and a
+/// ciphertexts of the agreed leg B amount, `decryptable_zero_balance` and a
 /// non-zero relative `pubkey_validity_proof_offset`. There is no public
 /// `amount_b`. The reference string, settlement destinations and earliest
 /// settlement timestamp use the same optional encoding as public Create.
@@ -125,8 +125,6 @@ fn parse_instruction_data(data: &[u8]) -> Result<CreateConfidentialDvpArgs, Prog
             );
             // The string bytes plus the three remaining option tags.
             require_len!(data, offset + 5 + ref_string_wire_len + 3);
-            core::str::from_utf8(&data[offset + 5..offset + 5 + ref_string_wire_len])
-                .map_err(|_| ProgramError::InvalidInstructionData)?;
             let mut ref_string = [0u8; MAX_REF_STRING_LEN];
             ref_string[..ref_string_wire_len]
                 .copy_from_slice(&data[offset + 5..offset + 5 + ref_string_wire_len]);
@@ -270,12 +268,19 @@ mod tests {
                 );
             }
         }
-        let mut invalid_utf8 = prefix;
-        invalid_utf8.extend_from_slice(&[1, 1, 0, 0, 0, 255, 0, 0, 0]);
-        assert_eq!(
-            process_create_confidential_dvp(&crate::ID, &[], &invalid_utf8),
-            Err(ProgramError::InvalidInstructionData)
-        );
+    }
+
+    #[test]
+    fn ref_string_preserves_non_utf8_bytes_like_public_create() {
+        let mut data = alloc::vec![0; OPTIONS_OFFSET];
+        data[PROOF_OFFSET] = 255;
+        data.push(1); // ref_string is present
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.push(0xff); // opaque reference byte, not valid UTF-8
+        data.extend_from_slice(&[0; 3]); // remaining options absent
+        let mut expected = [0; MAX_REF_STRING_LEN];
+        expected[0] = 0xff;
+        assert_eq!(parse_instruction_data(&data).unwrap().ref_string, expected);
     }
 
     #[test]

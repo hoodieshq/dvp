@@ -156,6 +156,7 @@ pub enum DvpSwapProgramError {
 
     /// (30) Confidential payment does not match the agreed amount.
     #[error("Confidential payment does not match the agreed amount")]
+    #[codama(name = "confidential_amount_b_mismatch")]
     ConfidentialAmountBMismatch,
 
     /// (31) Recipient does not have confidential transfer state.
@@ -180,6 +181,7 @@ pub enum DvpSwapProgramError {
 
     /// (36) A confidential refund is required for leg B.
     #[error("A confidential refund is required for leg B")]
+    #[codama(name = "leg_b_refund_required")]
     LegBRefundRequired,
 }
 

@@ -1,15 +1,25 @@
-//! Representative guards between public and confidential account layouts.
+//! Public/confidential mode guards for every lifecycle entry point.
 use crate::{
     state_utils::{
         assert_create_dvp, assert_reject_dvp, setup_dvp, setup_dvp_with_programs, DvpFixture,
     },
-    utils::{assert_program_error, TestContext, MEMO_PROGRAM_ID, TOKEN_2022_PROGRAM_ID},
+    utils::{
+        assert_instruction_error, assert_program_error, create_ata, TestContext, MEMO_PROGRAM_ID,
+        TOKEN_2022_PROGRAM_ID,
+    },
 };
 use dvp_swap_program_client::{
-    instructions::{ReclaimConfidentialDvpBuilder, ReclaimDvpBuilder, RecoverDvpBuilder},
-    types::LegBrefund,
+    instructions::{
+        ApplyConfidentialDvpBuilder, CancelConfidentialDvpBuilder, CancelDvpBuilder,
+        ReclaimConfidentialDvpBuilder, ReclaimDvpBuilder, RecoverConfidentialDvpBuilder,
+        RecoverDvpBuilder, RejectConfidentialDvpBuilder, RejectDvpBuilder,
+        SettleConfidentialDvpBuilder, SettleDvpBuilder,
+    },
+    types::{CtTransferData, LegBRefund},
     DvpSwapProgramError,
 };
+use solana_instruction::{error::InstructionError, Instruction};
+use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spl_token_2022_interface::{
     extension::{
@@ -20,8 +30,32 @@ use spl_token_2022_interface::{
     state::{Account as TokenAccount, AccountState},
 };
 
+fn assert_modes(
+    context: &mut TestContext,
+    cases: &[(&str, Instruction, &Keypair)],
+    expected: InstructionError,
+) {
+    for (name, ix, signer) in cases {
+        // Check every supplied account except the fee payer, including both escrows.
+        let before: Vec<_> = ix
+            .accounts
+            .iter()
+            .filter(|meta| meta.pubkey != context.payer.pubkey())
+            .map(|meta| (meta.pubkey, context.get_account(&meta.pubkey)))
+            .collect();
+        let result = context.send(ix.clone(), &[*signer]);
+        assert_instruction_error(
+            result.map_err(|error| format!("{name}: {error}")),
+            &format!("{expected:?}"),
+        );
+        for (address, account) in before {
+            assert_eq!(context.get_account(&address), account, "{name}: {address}");
+        }
+    }
+}
+
 #[test]
-fn public_reclaim_rejects_confidential_swap() {
+fn public_instructions_reject_confidential_swap() {
     let mut context = TestContext::new();
     let f = setup_dvp(&mut context, 0);
     assert_create_dvp(&mut context, &f);
@@ -31,45 +65,277 @@ fn public_reclaim_rejects_confidential_swap() {
     swap.lamports = context
         .svm
         .minimum_balance_for_rent_exemption(swap.data.len());
-    context.svm.set_account(f.swap_dvp, swap.clone()).unwrap();
-    let ix = ReclaimDvpBuilder::new()
-        .signer(f.user_a.pubkey())
-        .swap_dvp(f.swap_dvp)
-        .mint(f.mint_a)
-        .dvp_source_ata(f.dvp_ata_a)
-        .signer_dest_ata(f.user_a_ata_a)
-        .token_program(f.token_program_a)
-        .memo_program(MEMO_PROGRAM_ID)
-        .instruction();
-    assert_program_error(
-        context.send(ix, &[&f.user_a]),
-        DvpSwapProgramError::SwapModeMismatch as u32,
+    context.svm.set_account(f.swap_dvp, swap).unwrap();
+    let cases = [
+        (
+            "Reclaim",
+            ReclaimDvpBuilder::new()
+                .signer(f.user_a.pubkey())
+                .swap_dvp(f.swap_dvp)
+                .mint(f.mint_a)
+                .dvp_source_ata(f.dvp_ata_a)
+                .signer_dest_ata(f.user_a_ata_a)
+                .token_program(f.token_program_a)
+                .memo_program(MEMO_PROGRAM_ID)
+                .instruction(),
+            &f.user_a,
+        ),
+        (
+            "Settle",
+            SettleDvpBuilder::new()
+                .settlement_authority(f.settlement_authority.pubkey())
+                .swap_dvp(f.swap_dvp)
+                .mint_a(f.mint_a)
+                .mint_b(f.mint_b)
+                .dvp_ata_a(f.dvp_ata_a)
+                .dvp_ata_b(f.dvp_ata_b)
+                .user_a_destination_ata_b(f.user_a_ata_b)
+                .user_b_destination_ata_a(f.user_b_ata_a)
+                .user_a_ata_a(f.user_a_ata_a)
+                .user_b_ata_b(f.user_b_ata_b)
+                .token_program_a(f.token_program_a)
+                .token_program_b(f.token_program_b)
+                .memo_program(MEMO_PROGRAM_ID)
+                .leg_a_extras_count(0)
+                .instruction(),
+            &f.settlement_authority,
+        ),
+        (
+            "Cancel",
+            CancelDvpBuilder::new()
+                .settlement_authority(f.settlement_authority.pubkey())
+                .swap_dvp(f.swap_dvp)
+                .mint_a(f.mint_a)
+                .mint_b(f.mint_b)
+                .dvp_ata_a(f.dvp_ata_a)
+                .dvp_ata_b(f.dvp_ata_b)
+                .user_a_ata_a(f.user_a_ata_a)
+                .user_b_ata_b(f.user_b_ata_b)
+                .token_program_a(f.token_program_a)
+                .token_program_b(f.token_program_b)
+                .memo_program(MEMO_PROGRAM_ID)
+                .leg_a_extras_count(0)
+                .instruction(),
+            &f.settlement_authority,
+        ),
+        (
+            "Reject",
+            RejectDvpBuilder::new()
+                .signer(f.user_a.pubkey())
+                .swap_dvp(f.swap_dvp)
+                .mint_a(f.mint_a)
+                .mint_b(f.mint_b)
+                .dvp_ata_a(f.dvp_ata_a)
+                .dvp_ata_b(f.dvp_ata_b)
+                .user_a_ata_a(f.user_a_ata_a)
+                .user_b_ata_b(f.user_b_ata_b)
+                .token_program_a(f.token_program_a)
+                .token_program_b(f.token_program_b)
+                .memo_program(MEMO_PROGRAM_ID)
+                .leg_a_extras_count(0)
+                .instruction(),
+            &f.user_a,
+        ),
+    ];
+    assert_modes(
+        &mut context,
+        &cases,
+        InstructionError::Custom(DvpSwapProgramError::SwapModeMismatch as u32),
     );
-    assert_eq!(context.get_account(&f.swap_dvp).unwrap(), swap);
+}
+
+fn apply_instruction(f: &DvpFixture) -> Instruction {
+    ApplyConfidentialDvpBuilder::new()
+        .signer(f.user_b.pubkey())
+        .swap_dvp(f.swap_dvp)
+        .nonce_tombstone(f.nonce_tombstone)
+        .dvp_ata_b(f.dvp_ata_b)
+        .token_program(f.token_program_b)
+        .expected_pending_balance_credit_counter(0)
+        .new_decryptable_available_balance([0; 36])
+        .settlement_authority(f.settlement_authority.pubkey())
+        .user_a(f.user_a.pubkey())
+        .user_b(f.user_b.pubkey())
+        .mint_a(f.mint_a)
+        .mint_b(f.mint_b)
+        .nonce(f.nonce)
+        .instruction()
 }
 
 #[test]
-fn confidential_reclaim_rejects_public_swap() {
+fn confidential_instructions_check_swap_mode_before_optional_contexts() {
     let mut context = TestContext::new();
-    let f = setup_dvp(&mut context, 0);
+    let f = setup_dvp_with_programs(
+        &mut context,
+        0,
+        TOKEN_2022_PROGRAM_ID,
+        TOKEN_2022_PROGRAM_ID,
+    );
     assert_create_dvp(&mut context, &f);
-    let before = context.get_account(&f.swap_dvp);
-    let ix = ReclaimConfidentialDvpBuilder::new()
+    let swap = context.get_account(&f.swap_dvp).unwrap();
+    let zk_program = solana_sdk_ids::zk_elgamal_proof_program::ID;
+    let transfer = CtTransferData {
+        new_source_decryptable_available_balance: [0; 36],
+        auditor_ciphertext_lo: [0; 64],
+        auditor_ciphertext_hi: [0; 64],
+    };
+    let mut reclaim = ReclaimConfidentialDvpBuilder::new();
+    reclaim
+        .signer(f.user_b.pubkey())
+        .swap_dvp(f.swap_dvp)
+        .mint(f.mint_b)
+        .dvp_source_ata(f.dvp_ata_b)
+        .signer_dest_ata(f.user_b_ata_b)
+        .token_program(f.token_program_b)
+        .memo_program(MEMO_PROGRAM_ID)
+        .zk_elgamal_proof_program(zk_program);
+    let mut cancel = CancelConfidentialDvpBuilder::new();
+    cancel
+        .settlement_authority(f.settlement_authority.pubkey())
+        .swap_dvp(f.swap_dvp)
+        .mint_a(f.mint_a)
+        .mint_b(f.mint_b)
+        .dvp_ata_a(f.dvp_ata_a)
+        .dvp_ata_b(f.dvp_ata_b)
+        .user_a_ata_a(f.user_a_ata_a)
+        .user_b_ata_b(f.user_b_ata_b)
+        .token_program_a(f.token_program_a)
+        .token_program_b(f.token_program_b)
+        .memo_program(MEMO_PROGRAM_ID)
+        .zk_elgamal_proof_program(zk_program)
+        .leg_a_extras_count(0);
+    let mut reject = RejectConfidentialDvpBuilder::new();
+    reject
         .signer(f.user_a.pubkey())
         .swap_dvp(f.swap_dvp)
-        .mint(f.mint_a)
-        .dvp_source_ata(f.dvp_ata_a)
-        .signer_dest_ata(f.user_a_ata_a)
-        .token_program(f.token_program_a)
+        .mint_a(f.mint_a)
+        .mint_b(f.mint_b)
+        .dvp_ata_a(f.dvp_ata_a)
+        .dvp_ata_b(f.dvp_ata_b)
+        .user_a_ata_a(f.user_a_ata_a)
+        .user_b_ata_b(f.user_b_ata_b)
+        .token_program_a(f.token_program_a)
+        .token_program_b(f.token_program_b)
+        .memo_program(MEMO_PROGRAM_ID)
+        .zk_elgamal_proof_program(zk_program)
+        .leg_a_extras_count(0);
+    let mut settle = SettleConfidentialDvpBuilder::new();
+    settle
+        .settlement_authority(f.settlement_authority.pubkey())
+        .swap_dvp(f.swap_dvp)
+        .mint_a(f.mint_a)
+        .mint_b(f.mint_b)
+        .dvp_ata_a(f.dvp_ata_a)
+        .dvp_ata_b(f.dvp_ata_b)
+        .user_a_destination_ata_b(f.user_a_ata_b)
+        .user_b_destination_ata_a(f.user_b_ata_a)
+        .user_a_ata_a(f.user_a_ata_a)
+        .user_b_ata_b(f.user_b_ata_b)
+        .token_program_a(f.token_program_a)
+        .token_program_b(f.token_program_b)
+        .memo_program(MEMO_PROGRAM_ID)
+        .zk_elgamal_proof_program(zk_program)
+        .leg_a_extras_count(0)
+        .payment(transfer.clone())
+        .payment_equality_context(f.user_a.pubkey())
+        .payment_validity_context(f.user_a.pubkey())
+        .payment_range_context(f.user_a.pubkey())
+        .eq_lo_context(f.user_a.pubkey())
+        .eq_hi_context(f.user_a.pubkey())
+        .zero_context(f.user_a.pubkey());
+
+    // Optional contexts deliberately stay as placeholders: mode/owner errors win
+    // even when Full/Partial or Some(surplus) would require actual proof accounts.
+    let mut cases = Vec::new();
+    for refund in [
+        LegBRefund::None,
+        LegBRefund::Full(transfer.clone()),
+        LegBRefund::Partial(transfer.clone()),
+    ] {
+        cases.extend([
+            (
+                "Reclaim",
+                reclaim.leg_b_refund(refund.clone()).instruction(),
+                &f.user_b,
+            ),
+            (
+                "Cancel",
+                cancel.leg_b_refund(refund.clone()).instruction(),
+                &f.settlement_authority,
+            ),
+            (
+                "Reject",
+                reject.leg_b_refund(refund).instruction(),
+                &f.user_a,
+            ),
+        ]);
+    }
+    cases.push((
+        "Settle without surplus",
+        settle.instruction(),
+        &f.settlement_authority,
+    ));
+    cases.push((
+        "Settle with surplus",
+        settle.surplus_b(transfer).instruction(),
+        &f.settlement_authority,
+    ));
+    assert_modes(
+        &mut context,
+        &cases,
+        InstructionError::Custom(DvpSwapProgramError::SwapModeMismatch as u32),
+    );
+    assert_modes(
+        &mut context,
+        &[("Apply", apply_instruction(&f), &f.user_b)],
+        InstructionError::Custom(DvpSwapProgramError::SwapModeMismatch as u32),
+    );
+
+    let mut closed = swap;
+    closed.owner = solana_sdk_ids::system_program::ID;
+    closed.data.clear();
+    context.svm.set_account(f.swap_dvp, closed).unwrap();
+    assert_modes(&mut context, &cases, InstructionError::InvalidAccountOwner);
+}
+
+#[test]
+fn confidential_recovery_and_apply_reject_public_escrow() {
+    let mut context = TestContext::new();
+    let f = setup_dvp_with_programs(
+        &mut context,
+        0,
+        TOKEN_2022_PROGRAM_ID,
+        TOKEN_2022_PROGRAM_ID,
+    );
+    assert_create_dvp(&mut context, &f);
+    assert_reject_dvp(&mut context, &f, &f.user_a);
+    create_ata(&mut context, &f.swap_dvp, &f.mint_b, &f.token_program_b);
+    let recover = RecoverConfidentialDvpBuilder::new()
+        .signer(f.user_b.pubkey())
+        .swap_dvp(f.swap_dvp)
+        .nonce_tombstone(f.nonce_tombstone)
+        .mint(f.mint_b)
+        .dvp_escrow_ata(f.dvp_ata_b)
+        .signer_dest_ata(f.user_b_ata_b)
+        .token_program(f.token_program_b)
         .memo_program(MEMO_PROGRAM_ID)
         .zk_elgamal_proof_program(solana_sdk_ids::zk_elgamal_proof_program::ID)
-        .leg_b_refund(LegBrefund::None)
+        .settlement_authority(f.settlement_authority.pubkey())
+        .user_a(f.user_a.pubkey())
+        .user_b(f.user_b.pubkey())
+        .mint_a(f.mint_a)
+        .mint_b(f.mint_b)
+        .nonce(f.nonce)
+        .leg_b_refund(LegBRefund::None)
         .instruction();
-    assert_program_error(
-        context.send(ix, &[&f.user_a]),
-        DvpSwapProgramError::SwapModeMismatch as u32,
+    assert_modes(
+        &mut context,
+        &[
+            ("Recover", recover, &f.user_b),
+            ("Apply", apply_instruction(&f), &f.user_b),
+        ],
+        InstructionError::Custom(DvpSwapProgramError::EscrowNotConfidential as u32),
     );
-    assert_eq!(context.get_account(&f.swap_dvp), before);
 }
 
 fn set_ct_escrow(context: &mut TestContext, f: &DvpFixture) {

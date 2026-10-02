@@ -14,7 +14,7 @@ const FIXED_ACCOUNTS_LEN: usize = 16;
 /// settlement authority. Closed-account and proof-context rent goes to that signer.
 /// Cash refund and escrow-closing behavior follow
 /// [`process_cancel_confidential_dvp`](super::cancel_confidential_dvp::process_cancel_confidential_dvp),
-/// including recovery of any remaining cash balance after the swap closes.
+/// including recovery of any remaining leg B balance after the swap closes.
 ///
 /// # Account Layout
 /// Accounts 0-10 follow the public Reject layout, with Token-2022 for leg B.
@@ -46,6 +46,7 @@ pub fn process_reject_confidential_dvp(
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    check_confidential_swap(program_id, swap_dvp_info)?;
     check_refund_contexts(
         program_id,
         &args.leg_b_refund,
@@ -54,7 +55,6 @@ pub fn process_reject_confidential_dvp(
         range_context_info,
         zero_context_info,
     )?;
-    check_confidential_swap(program_id, swap_dvp_info)?;
 
     // Reject before any mutation or CPI until this lifecycle operation is implemented.
     Err(ProgramError::InvalidInstructionData)

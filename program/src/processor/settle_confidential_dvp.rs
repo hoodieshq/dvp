@@ -11,8 +11,8 @@ const FIXED_ACCOUNTS_LEN: usize = 23;
 ///
 /// Confidential counterpart of [`process_settle_dvp`](super::settle_dvp::process_settle_dvp):
 /// the settlement authority delivers both legs atomically and refunds surplus
-/// to each depositor. Cash payment proofs bind the transferred amount to the
-/// ciphertexts stored at Create. The swap and asset escrow close; the cash
+/// to each depositor. Leg B payment proofs bind the transferred amount to the
+/// ciphertexts stored at Create. The swap and asset escrow close; the leg B
 /// escrow stays open if pending or public balances remain, for Apply and Recover.
 /// Pending credits are not applied during settlement.
 ///
@@ -29,7 +29,7 @@ const FIXED_ACCOUNTS_LEN: usize = 23;
 /// # Instruction Data
 /// `leg_a_extras_count` (u8), `payment` ([`CtTransferData`]) and `surplus_b`
 /// (`Option<CtTransferData>`), in that order. Payment goes to the seller's
-/// configured cash destination; any cash surplus goes to `user_b`'s own ATA.
+/// configured leg B destination; any leg B surplus goes to `user_b`'s own ATA.
 ///
 /// # Implementation Status
 /// Currently decodes the arguments, checks the account count, optional-context
@@ -52,6 +52,7 @@ pub fn process_settle_confidential_dvp(
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    check_confidential_swap(program_id, swap_dvp_info)?;
     check_transfer_contexts(
         program_id,
         args.surplus.is_some(),
@@ -59,7 +60,6 @@ pub fn process_settle_confidential_dvp(
         surplus_validity_context_info,
         surplus_range_context_info,
     )?;
-    check_confidential_swap(program_id, swap_dvp_info)?;
 
     // Reject before any mutation or CPI until this lifecycle operation is implemented.
     Err(ProgramError::InvalidInstructionData)

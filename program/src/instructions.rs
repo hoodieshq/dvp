@@ -426,7 +426,7 @@ pub enum DvpSwapProgramInstruction {
     #[codama(account(name = "mint_a", docs = "Mint of the asset leg (seller delivers)"))]
     #[codama(account(
         name = "mint_b",
-        docs = "Token-2022 cash mint with ConfidentialTransferMint"
+        docs = "Token-2022 mint for leg B with ConfidentialTransferMint"
     ))]
     #[codama(account(
         name = "dvp_ata_a",
@@ -550,12 +550,12 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "dvp_ata_b",
-        docs = "Confidential cash escrow; left open if balances remain after the operation",
+        docs = "Confidential leg B escrow; left open if balances remain after the operation",
         writable
     ))]
     #[codama(account(
         name = "user_a_destination_ata_b",
-        docs = "user_a_settlement_destination's ATA for mint_b; receives the cash leg (destination defaults to user_a)",
+        docs = "user_a_settlement_destination's ATA for mint_b; receives the leg B payment (destination defaults to user_a)",
         writable
     ))]
     #[codama(account(
@@ -570,7 +570,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "user_b_ata_b",
-        docs = "user_b's ATA for mint_b; receives any cash-leg surplus refund. Required and must be pre-initialized, same as user_a_ata_a",
+        docs = "user_b's ATA for mint_b; receives any leg B surplus refund. Required and must be pre-initialized, same as user_a_ata_a",
         writable
     ))]
     #[codama(account(
@@ -588,17 +588,17 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "payment_equality_context",
-        docs = "CiphertextCommitmentEquality context for the cash-leg payment",
+        docs = "CiphertextCommitmentEquality context for the leg B payment",
         writable
     ))]
     #[codama(account(
         name = "payment_validity_context",
-        docs = "BatchedGroupedCiphertext3HandlesValidity context for the cash-leg payment",
+        docs = "BatchedGroupedCiphertext3HandlesValidity context for the leg B payment",
         writable
     ))]
     #[codama(account(
         name = "payment_range_context",
-        docs = "BatchedRangeProofU128 context for the cash-leg payment",
+        docs = "BatchedRangeProofU128 context for the leg B payment",
         writable
     ))]
     #[codama(account(
@@ -613,7 +613,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "zero_context",
-        docs = "ZeroCiphertext context proving the cash escrow is empty after payment and surplus refund",
+        docs = "ZeroCiphertext context proving the leg B escrow is empty after payment and surplus refund",
         writable
     ))]
     #[codama(account(
@@ -661,7 +661,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "dvp_ata_b",
-        docs = "Confidential cash escrow; left open if balances remain after the operation",
+        docs = "Confidential leg B escrow; left open if balances remain after the operation",
         writable
     ))]
     #[codama(account(
@@ -737,7 +737,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "dvp_ata_b",
-        docs = "Confidential cash escrow; left open if balances remain after the operation",
+        docs = "Confidential leg B escrow; left open if balances remain after the operation",
         writable
     ))]
     #[codama(account(
@@ -813,7 +813,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "dvp_escrow_ata",
-        docs = "Confidential cash escrow of the closed swap; closed only when all balances are zero",
+        docs = "Confidential leg B escrow of the closed swap; closed only when all balances are zero",
         writable
     ))]
     #[codama(account(
@@ -823,7 +823,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "token_program",
-        docs = "Token-2022 program that owns the cash escrow"
+        docs = "Token-2022 program that owns the leg B escrow"
     ))]
     #[codama(account(
         name = "memo_program",
@@ -883,12 +883,12 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "dvp_ata_b",
-        docs = "Confidential cash escrow; pending credits are applied to its available balance",
+        docs = "Confidential leg B escrow; pending credits are applied to its available balance",
         writable
     ))]
     #[codama(account(
         name = "token_program",
-        docs = "Token-2022 program that owns the cash escrow"
+        docs = "Token-2022 program that owns the leg B escrow"
     ))]
     ApplyConfidentialDvp {
         expected_pending_balance_credit_counter: u64,

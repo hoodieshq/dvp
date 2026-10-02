@@ -9,17 +9,17 @@ const FIXED_ACCOUNTS_LEN: usize = 13;
 
 /// Processes the RecoverConfidentialDvp instruction.
 ///
-/// Confidential cash-leg counterpart of
+/// Confidential leg B counterpart of
 /// [`process_recover_dvp`](super::recover_dvp::process_recover_dvp): after the
-/// swap closes, `user_b` recovers cash left by a partial refund, a pending
+/// swap closes, `user_b` recovers leg B funds left by a partial refund, a pending
 /// credit or a public deposit. Pending credits must first be applied with
 /// [`process_apply_confidential_dvp`](super::apply_confidential_dvp::process_apply_confidential_dvp).
-/// The cash escrow closes only when all public and confidential balances are
+/// The leg B escrow closes only when all public and confidential balances are
 /// empty. Leg A of a closed confidential swap uses public Recover instead.
 ///
 /// # Account Layout
 /// Accounts 0-7 follow the public Recover layout, selecting `user_b`, `mint_b`
-/// and the Token-2022 cash escrow. Account 8 is the ZK ElGamal Proof program;
+/// and the Token-2022 leg B escrow. Account 8 is the ZK ElGamal Proof program;
 /// accounts 9-12 are writable equality, validity, range and zero contexts,
 /// or DvP program-id placeholders according to the refund mode.
 /// Transfer-hook extras follow. Closed-account and context rent goes to `user_b`.

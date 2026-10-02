@@ -228,7 +228,7 @@
       },
       {
         "kind": "definedTypeNode",
-        "name": "legBrefund",
+        "name": "legBRefund",
         "type": {
           "kind": "enumTypeNode",
           "size": {
@@ -456,7 +456,7 @@
         "code": 30,
         "kind": "errorNode",
         "message": "Confidential payment does not match the agreed amount",
-        "name": "confidentialAmountBmismatch"
+        "name": "confidentialAmountBMismatch"
       },
       {
         "code": 31,
@@ -492,7 +492,7 @@
         "code": 36,
         "kind": "errorNode",
         "message": "A confidential refund is required for leg B",
-        "name": "legBrefundRequired"
+        "name": "legBRefundRequired"
       }
     ],
     "instructions": [
@@ -1491,7 +1491,7 @@
           },
           {
             "docs": [
-              "Token-2022 cash mint with ConfidentialTransferMint"
+              "Token-2022 mint for leg B with ConfidentialTransferMint"
             ],
             "isSigner": false,
             "isWritable": false,
@@ -1878,7 +1878,7 @@
             "name": "legBRefund",
             "type": {
               "kind": "definedTypeLinkNode",
-              "name": "legBrefund"
+              "name": "legBRefund"
             }
           }
         ],
@@ -1941,7 +1941,7 @@
           },
           {
             "docs": [
-              "Confidential cash escrow; left open if balances remain after the operation"
+              "Confidential leg B escrow; left open if balances remain after the operation"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -1950,7 +1950,7 @@
           },
           {
             "docs": [
-              "user_a_settlement_destination's ATA for mint_b; receives the cash leg (destination defaults to user_a)"
+              "user_a_settlement_destination's ATA for mint_b; receives the leg B payment (destination defaults to user_a)"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -1977,7 +1977,7 @@
           },
           {
             "docs": [
-              "user_b's ATA for mint_b; receives any cash-leg surplus refund. Required and must be pre-initialized, same as user_a_ata_a"
+              "user_b's ATA for mint_b; receives any leg B surplus refund. Required and must be pre-initialized, same as user_a_ata_a"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2022,7 +2022,7 @@
           },
           {
             "docs": [
-              "CiphertextCommitmentEquality context for the cash-leg payment"
+              "CiphertextCommitmentEquality context for the leg B payment"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2031,7 +2031,7 @@
           },
           {
             "docs": [
-              "BatchedGroupedCiphertext3HandlesValidity context for the cash-leg payment"
+              "BatchedGroupedCiphertext3HandlesValidity context for the leg B payment"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2040,7 +2040,7 @@
           },
           {
             "docs": [
-              "BatchedRangeProofU128 context for the cash-leg payment"
+              "BatchedRangeProofU128 context for the leg B payment"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2067,7 +2067,7 @@
           },
           {
             "docs": [
-              "ZeroCiphertext context proving the cash escrow is empty after payment and surplus refund"
+              "ZeroCiphertext context proving the leg B escrow is empty after payment and surplus refund"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2213,7 +2213,7 @@
           },
           {
             "docs": [
-              "Confidential cash escrow; left open if balances remain after the operation"
+              "Confidential leg B escrow; left open if balances remain after the operation"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2344,7 +2344,7 @@
             "name": "legBRefund",
             "type": {
               "kind": "definedTypeLinkNode",
-              "name": "legBrefund"
+              "name": "legBRefund"
             }
           }
         ],
@@ -2407,7 +2407,7 @@
           },
           {
             "docs": [
-              "Confidential cash escrow; left open if balances remain after the operation"
+              "Confidential leg B escrow; left open if balances remain after the operation"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2538,7 +2538,7 @@
             "name": "legBRefund",
             "type": {
               "kind": "definedTypeLinkNode",
-              "name": "legBrefund"
+              "name": "legBRefund"
             }
           }
         ],
@@ -2592,7 +2592,7 @@
           },
           {
             "docs": [
-              "Confidential cash escrow of the closed swap; closed only when all balances are zero"
+              "Confidential leg B escrow of the closed swap; closed only when all balances are zero"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2610,7 +2610,7 @@
           },
           {
             "docs": [
-              "Token-2022 program that owns the cash escrow"
+              "Token-2022 program that owns the leg B escrow"
             ],
             "isSigner": false,
             "isWritable": false,
@@ -2740,7 +2740,7 @@
             "name": "legBRefund",
             "type": {
               "kind": "definedTypeLinkNode",
-              "name": "legBrefund"
+              "name": "legBRefund"
             }
           }
         ],
@@ -2785,7 +2785,7 @@
           },
           {
             "docs": [
-              "Confidential cash escrow; pending credits are applied to its available balance"
+              "Confidential leg B escrow; pending credits are applied to its available balance"
             ],
             "isSigner": false,
             "isWritable": true,
@@ -2794,7 +2794,7 @@
           },
           {
             "docs": [
-              "Token-2022 program that owns the cash escrow"
+              "Token-2022 program that owns the leg B escrow"
             ],
             "isSigner": false,
             "isWritable": false,

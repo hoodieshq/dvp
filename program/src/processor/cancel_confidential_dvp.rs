@@ -11,8 +11,8 @@ const FIXED_ACCOUNTS_LEN: usize = 16;
 ///
 /// Confidential counterpart of [`process_cancel_dvp`](super::cancel_dvp::process_cancel_dvp):
 /// the settlement authority unwinds both legs, including after expiry.
-/// The swap and asset escrow close; the cash escrow stays open if any balance
-/// remains. After a partial cash refund, `user_b` recovers the remainder with
+/// The swap and asset escrow close; the leg B escrow stays open if any balance
+/// remains. After a partial leg B refund, `user_b` recovers the remainder with
 /// [`process_recover_confidential_dvp`](super::recover_confidential_dvp::process_recover_confidential_dvp).
 /// Pending credits are not applied by this instruction.
 ///
@@ -27,7 +27,7 @@ const FIXED_ACCOUNTS_LEN: usize = 16;
 /// `leg_a_extras_count` (u8), then [`LegBRefund`]. Refund modes and their
 /// required contexts follow
 /// [`process_reclaim_confidential_dvp`](super::reclaim_confidential_dvp::process_reclaim_confidential_dvp).
-/// Here `None` skips the cash transfer; any public cash balance remains for Recover.
+/// Here `None` skips the leg B transfer; any public leg B balance remains for Recover.
 ///
 /// # Implementation Status
 /// Currently decodes the arguments, checks the account count, optional-context
@@ -50,6 +50,7 @@ pub fn process_cancel_confidential_dvp(
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    check_confidential_swap(program_id, swap_dvp_info)?;
     check_refund_contexts(
         program_id,
         &args.leg_b_refund,
@@ -58,7 +59,6 @@ pub fn process_cancel_confidential_dvp(
         range_context_info,
         zero_context_info,
     )?;
-    check_confidential_swap(program_id, swap_dvp_info)?;
 
     // Reject before any mutation or CPI until this lifecycle operation is implemented.
     Err(ProgramError::InvalidInstructionData)

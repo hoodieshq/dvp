@@ -22,7 +22,7 @@ const FIXED_ACCOUNTS_LEN: usize = 12;
 /// the DvP program id as a placeholder. Transfer-hook extras follow this prefix.
 ///
 /// # Instruction Data
-/// [`LegBRefund`] selects the cash refund: `None` has no transfer payload or
+/// [`LegBRefund`] selects the leg B refund: `None` has no transfer payload or
 /// contexts; `Full` carries transfer data and all four contexts; `Partial`
 /// carries transfer data and the first three contexts, leaving a remainder.
 /// `user_a` supplies `None`. For `user_b`, `None` withdraws the public balance
@@ -49,6 +49,7 @@ pub fn process_reclaim_confidential_dvp(
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    check_confidential_swap(program_id, swap_dvp_info)?;
     check_refund_contexts(
         program_id,
         &args.leg_b_refund,
@@ -57,7 +58,6 @@ pub fn process_reclaim_confidential_dvp(
         range_context_info,
         zero_context_info,
     )?;
-    check_confidential_swap(program_id, swap_dvp_info)?;
 
     // Reject before any mutation or CPI until this lifecycle operation is implemented.
     Err(ProgramError::InvalidInstructionData)

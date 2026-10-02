@@ -46,6 +46,7 @@ impl TryFrom<&[u8]> for CtTransferData {
 
 /// Tag 0: no CT transfer; tag 1: drain and zero-check; tag 2: partial refund.
 #[derive(Clone, Debug, PartialEq, CodamaType)]
+#[codama(name = "leg_b_refund")]
 pub enum LegBRefund {
     None,
     Full(CtTransferData),

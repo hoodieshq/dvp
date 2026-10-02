@@ -8,7 +8,7 @@ const FIXED_ACCOUNTS_LEN: usize = 5;
 
 /// Processes the ApplyConfidentialDvp instruction.
 ///
-/// Moves the cash escrow's pending confidential balance into its available
+/// Moves the leg B escrow's pending confidential balance into its available
 /// balance through Token-2022 ApplyPendingBalance. Either depositor or the
 /// settlement authority may apply while the swap is open or after it closes.
 /// There is no public counterpart; the post-close PDA and tombstone checks
@@ -18,7 +18,7 @@ const FIXED_ACCOUNTS_LEN: usize = 5;
 /// 0. `[signer]` signer - user_a, user_b or settlement_authority
 /// 1. `[]` swap_dvp - Open confidential swap or its closed PDA address
 /// 2. `[]` nonce_tombstone - Proves the swap existed after it closes
-/// 3. `[writable]` dvp_ata_b - PDA's canonical Token-2022 cash escrow
+/// 3. `[writable]` dvp_ata_b - PDA's canonical Token-2022 leg B escrow
 /// 4. `[]` token_program - Token-2022 program
 ///
 /// No proof contexts or transfer-hook extras are required.
