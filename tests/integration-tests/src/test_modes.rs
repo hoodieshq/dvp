@@ -310,7 +310,8 @@ fn confidential_recovery_and_apply_reject_public_escrow() {
     assert_create_dvp(&mut context, &f);
     assert_reject_dvp(&mut context, &f, &f.user_a);
     create_ata(&mut context, &f.swap_dvp, &f.mint_b, &f.token_program_b);
-    let recover = RecoverConfidentialDvpBuilder::new()
+    let mut recover = RecoverConfidentialDvpBuilder::new();
+    recover
         .signer(f.user_b.pubkey())
         .swap_dvp(f.swap_dvp)
         .nonce_tombstone(f.nonce_tombstone)
@@ -325,15 +326,25 @@ fn confidential_recovery_and_apply_reject_public_escrow() {
         .user_b(f.user_b.pubkey())
         .mint_a(f.mint_a)
         .mint_b(f.mint_b)
-        .nonce(f.nonce)
-        .leg_b_refund(LegBRefund::None)
-        .instruction();
+        .nonce(f.nonce);
+    let transfer = CtTransferData {
+        new_source_decryptable_available_balance: [0; 36],
+        auditor_ciphertext_lo: [0; 64],
+        auditor_ciphertext_hi: [0; 64],
+    };
+    // Keep placeholders for every mode: the escrow mode error takes priority
+    // over refund-specific proof-context checks.
+    let mut cases = vec![("Apply", apply_instruction(&f), &f.user_b)];
+    for (name, refund) in [
+        ("Recover None", LegBRefund::None),
+        ("Recover Full", LegBRefund::Full(transfer.clone())),
+        ("Recover Partial", LegBRefund::Partial(transfer)),
+    ] {
+        cases.push((name, recover.leg_b_refund(refund).instruction(), &f.user_b));
+    }
     assert_modes(
         &mut context,
-        &[
-            ("Recover", recover, &f.user_b),
-            ("Apply", apply_instruction(&f), &f.user_b),
-        ],
+        &cases,
         InstructionError::Custom(DvpSwapProgramError::EscrowNotConfidential as u32),
     );
 }

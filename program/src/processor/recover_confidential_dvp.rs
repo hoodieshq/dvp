@@ -51,6 +51,7 @@ pub fn process_recover_confidential_dvp(
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    check_confidential_escrow(dvp_escrow_ata_info)?;
     check_refund_contexts(
         program_id,
         &args.leg_b_refund,
@@ -59,7 +60,6 @@ pub fn process_recover_confidential_dvp(
         range_context_info,
         zero_context_info,
     )?;
-    check_confidential_escrow(dvp_escrow_ata_info)?;
 
     // Reject before any mutation or CPI until this lifecycle operation is implemented.
     Err(ProgramError::InvalidInstructionData)
