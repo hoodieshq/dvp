@@ -23,8 +23,8 @@ use spl_token_2022::{
 
 use super::{
     check_confidential_recipient, check_confidential_zero, check_proof_context,
-    check_transfer_proof_contexts, read_confidential_account, CtTransferData, ProofType,
-    AE_CIPHERTEXT_LEN, ZK_ELGAMAL_PROOF_PROGRAM_ID,
+    check_transfer_proof_contexts, CtTransferData, ProofType, AE_CIPHERTEXT_LEN,
+    ZK_ELGAMAL_PROOF_PROGRAM_ID,
 };
 use crate::{
     processor::shared::{invoke_memo, requires_memo, MAX_HOOK_REMAINING_ACCOUNTS},
@@ -258,8 +258,7 @@ pub fn empty_confidential_account_if_no_pending(
     proof_authority: &Address,
     signers: &[Signer],
 ) -> Result<bool, ProgramError> {
-    check_confidential_zero(escrow, zero, proof_authority)?;
-    let state = read_confidential_account(escrow)?;
+    let state = check_confidential_zero(escrow, zero, proof_authority)?;
     if state.pending_balance_lo != Default::default()
         || state.pending_balance_hi != Default::default()
     {

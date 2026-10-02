@@ -1,7 +1,8 @@
 //! Validation of pre-verified ZK contexts used by confidential transfers.
 
 use core::mem::size_of;
-use pinocchio::{account::AccountView, Address, ProgramResult};
+use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
+use spl_token_2022::extension::confidential_transfer::ConfidentialTransferAccount;
 pub use spl_token_2022::solana_zk_sdk::zk_elgamal_proof_program::proof_data::ProofType;
 use spl_token_2022::solana_zk_sdk::zk_elgamal_proof_program::{
     self,
@@ -151,13 +152,14 @@ pub fn check_confidential_amount(
 }
 
 /// Matches the zero proof to the actual available ciphertext after transfers.
+/// Returns the checked state so callers can inspect pending credits without reparsing.
 /// Pending credits are deliberately excluded from this check.
 #[inline(always)]
 pub fn check_confidential_zero(
     escrow: &AccountView,
     zero: &AccountView,
     authority: &Address,
-) -> ProgramResult {
+) -> Result<ConfidentialTransferAccount, ProgramError> {
     check_proof_context(zero, ProofType::ZeroCiphertext, authority)?;
     let state = read_confidential_account(escrow)?;
     let data = zero.try_borrow()?;
@@ -167,5 +169,5 @@ pub fn check_confidential_zero(
             && &context[PUBKEY_LEN..] == bytemuck::bytes_of(&state.available_balance),
         DvpSwapProgramError::EscrowBalanceNotZero
     );
-    Ok(())
+    Ok(state)
 }

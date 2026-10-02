@@ -15,10 +15,9 @@ use crate::{error::DvpSwapProgramError, require};
 #[inline(always)]
 fn confidential_account(
     account: &AccountView,
-    missing: DvpSwapProgramError,
-) -> Result<ConfidentialTransferAccount, ProgramError> {
+) -> Result<Option<ConfidentialTransferAccount>, ProgramError> {
     if !account.owned_by(&TOKEN_2022_PROGRAM_ID) {
-        return Err(missing.into());
+        return Ok(None);
     }
     let data = account.try_borrow()?;
     let state = StateWithExtensions::<Account>::unpack(&data)
@@ -27,11 +26,12 @@ fn confidential_account(
         .get_extension_types()
         .map_err(|_| ProgramError::InvalidAccountData)?;
     if !types.contains(&ExtensionType::ConfidentialTransferAccount) {
-        return Err(missing.into());
+        return Ok(None);
     }
     state
         .get_extension::<ConfidentialTransferAccount>()
         .copied()
+        .map(Some)
         .map_err(|_| ProgramError::InvalidAccountData)
 }
 
@@ -40,13 +40,14 @@ fn confidential_account(
 pub fn read_confidential_account(
     account: &AccountView,
 ) -> Result<ConfidentialTransferAccount, ProgramError> {
-    confidential_account(account, DvpSwapProgramError::EscrowNotConfidential)
+    confidential_account(account)?.ok_or(DvpSwapProgramError::EscrowNotConfidential.into())
 }
 
 /// Checks the four confidential recipient requirements before a Transfer CPI.
 #[inline(always)]
 pub fn check_confidential_recipient(account: &AccountView) -> ProgramResult {
-    let state = confidential_account(account, DvpSwapProgramError::RecipientNotConfidential)?;
+    let state =
+        confidential_account(account)?.ok_or(DvpSwapProgramError::RecipientNotConfidential)?;
     require!(
         bool::from(state.approved),
         DvpSwapProgramError::RecipientNotApproved
@@ -67,20 +68,5 @@ pub fn check_confidential_recipient(account: &AccountView) -> ProgramResult {
 /// Parse the entire TLV list so malformed extension data cannot bypass the guard.
 #[inline(always)]
 pub fn has_confidential_transfer_account(info: &AccountView) -> Result<bool, ProgramError> {
-    if !info.owned_by(&TOKEN_2022_PROGRAM_ID) {
-        return Ok(false);
-    }
-    let data = info.try_borrow()?;
-    let account = StateWithExtensions::<Account>::unpack(&data)
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-    let types = account
-        .get_extension_types()
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-    if !types.contains(&ExtensionType::ConfidentialTransferAccount) {
-        return Ok(false);
-    }
-    account
-        .get_extension::<ConfidentialTransferAccount>()
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-    Ok(true)
+    Ok(confidential_account(info)?.is_some())
 }
