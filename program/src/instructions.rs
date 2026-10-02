@@ -398,7 +398,7 @@ pub enum DvpSwapProgramInstruction {
         nonce: u64,
     } = 5,
 
-    /// Declares the confidential create ABI; execution is enabled in a later stage.
+    /// Creates a DvP with a confidential leg B.
     #[codama(account(
         name = "payer",
         docs = "Funds account/ATA creation rent",
@@ -466,7 +466,7 @@ pub enum DvpSwapProgramInstruction {
         earliest_settlement_timestamp: Option<i64>,
     } = 6,
 
-    /// Declares a confidential refund while the swap stays open.
+    /// Refunds the signer's leg while the confidential swap stays open.
     #[codama(account(
         name = "signer",
         docs = "Depositor; must equal dvp.user_a or dvp.user_b; receives closed proof-context rent",
@@ -529,7 +529,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     ReclaimConfidentialDvp { leg_b_refund: LegBRefund } = 7,
 
-    /// Declares confidential payment and optional surplus transfer.
+    /// Settles the confidential payment and refunds any surplus.
     #[codama(account(
         name = "settlement_authority",
         docs = "Must equal dvp.settlement_authority; receives closed-account rent",
@@ -640,7 +640,7 @@ pub enum DvpSwapProgramInstruction {
         surplus_b: Option<CtTransferData>,
     } = 8,
 
-    /// Declares a terminal confidential refund of both legs.
+    /// Refunds both legs and closes the confidential swap.
     #[codama(account(
         name = "settlement_authority",
         docs = "Must equal dvp.settlement_authority; receives closed-account rent",
@@ -716,7 +716,7 @@ pub enum DvpSwapProgramInstruction {
         leg_b_refund: LegBRefund,
     } = 9,
 
-    /// Declares a terminal confidential refund of both legs.
+    /// Refunds both legs and closes the confidential swap.
     #[codama(account(
         name = "signer",
         docs = "Must equal dvp.user_a or dvp.user_b; receives closed-account rent",
@@ -792,7 +792,7 @@ pub enum DvpSwapProgramInstruction {
         leg_b_refund: LegBRefund,
     } = 10,
 
-    /// Declares recovery of a confidential escrow after the swap closes.
+    /// Recovers a confidential escrow after the swap closes.
     #[codama(account(
         name = "signer",
         docs = "Must equal user_b from the original seeds; receives closed escrow and proof-context rent",
@@ -809,7 +809,7 @@ pub enum DvpSwapProgramInstruction {
     ))]
     #[codama(account(
         name = "mint",
-        docs = "Cash mint; must equal mint_b from the original seeds"
+        docs = "Leg B mint; must equal mint_b from the original seeds"
     ))]
     #[codama(account(
         name = "dvp_escrow_ata",
@@ -867,7 +867,7 @@ pub enum DvpSwapProgramInstruction {
         leg_b_refund: LegBRefund,
     } = 11,
 
-    /// Declares applying pending confidential credits, before or after close.
+    /// Applies pending confidential credits, before or after close.
     #[codama(account(
         name = "signer",
         docs = "user_a, user_b or settlement_authority from the swap state or original seeds",

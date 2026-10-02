@@ -1,6 +1,6 @@
 # DvP Confidential Transfer: Program Specification
 
-**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks and shared CT/ZK helpers. Confidential lifecycle instructions remain disabled.
+**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers and all confidential on-chain lifecycle instructions.
 
 **Source baseline.** Program sources at `solana-foundation/dvp` main `dfd47bf`, including the deployed program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
 
@@ -542,7 +542,7 @@ Codes continue after the mainnet release's last code (23 at `dfd47bf`; re-check 
 | Error | When |
 | --- | --- |
 | `SwapModeMismatch` | Public instruction on a confidential swap or CT escrow, or a confidential instruction on an open public swap |
-| `MintNotConfidential` | CreateConfidentialDvp: `mint_b` lacks `ConfidentialTransferMint` |
+| `MintNotConfidential` | CreateConfidentialDvp / SettleConfidentialDvp: `mint_b` lacks `ConfidentialTransferMint` |
 | `EscrowPublicBalanceNotEmpty` | CreateConfidentialDvp: leg B escrow already holds a public balance |
 | `EscrowNotConfidential` | Apply, RecoverConfidentialDvp: escrow lacks the CT extension |
 | `InvalidProofContext` | Context owner, length or type wrong |
