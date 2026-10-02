@@ -1,6 +1,6 @@
 # DvP Confidential Transfer: Program Specification
 
-**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts and instruction ABI checks. Confidential execution remains disabled.
+**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks and shared CT/ZK helpers. Confidential lifecycle instructions remain disabled.
 
 **Source baseline.** Program sources at `solana-foundation/dvp` main `dfd47bf`, including the deployed program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
 

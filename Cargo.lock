@@ -1251,6 +1251,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "confidential-transfer-fixture"
+version = "0.1.0"
+dependencies = [
+ "dvp-swap-program",
+ "pinocchio",
+ "solana-address 2.6.1",
+]
+
+[[package]]
 name = "console"
 version = "0.16.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1586,6 +1595,7 @@ dependencies = [
 name = "dvp-swap-program"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "codama",
  "pinocchio",
  "pinocchio-associated-token-account",
@@ -2128,6 +2138,15 @@ name = "histogram"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12cb882ccb290b8646e554b157ab0b71e64e8d5bef775cd66b6531e52d302669"
+
+[[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac",
+]
 
 [[package]]
 name = "hmac"
@@ -6792,6 +6811,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-zk-sdk"
+version = "7.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96cd8535d2f40d43a1d47af2849e1c86706a597a2ad84207441f51a50f09d8fd"
+dependencies = [
+ "aes-gcm-siv",
+ "base64 0.22.1",
+ "bincode",
+ "bytemuck",
+ "curve25519-dalek",
+ "hkdf",
+ "itertools 0.14.0",
+ "merlin",
+ "rand 0.8.8",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha3",
+ "solana-address 2.6.1",
+ "solana-derivation-path 3.0.0",
+ "solana-seed-derivable 3.0.0",
+ "solana-seed-phrase 3.0.0",
+ "solana-signature 3.4.1",
+ "solana-signer 3.0.1",
+ "solana-zk-elgamal-proof-interface",
+ "solana-zk-sdk-pod",
+ "subtle",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "solana-zk-sdk-pod"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7144,7 +7196,7 @@ dependencies = [
  "spl-token",
  "spl-token-confidential-transfer-ciphertext-arithmetic",
  "spl-token-confidential-transfer-proof-extraction 0.4.1",
- "spl-token-confidential-transfer-proof-generation",
+ "spl-token-confidential-transfer-proof-generation 0.4.1",
  "spl-token-group-interface 0.6.0",
  "spl-token-metadata-interface 0.7.0",
  "spl-transfer-hook-interface 0.10.0",
@@ -7242,6 +7294,19 @@ checksum = "fa27b9174bea869a7ebf31e0be6890bce90b1a4288bc2bbf24bd413f80ae3fde"
 dependencies = [
  "curve25519-dalek",
  "solana-zk-sdk 2.3.10",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "spl-token-confidential-transfer-proof-generation"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03d81c8000b53c6a398a2173d5009e2b7248a450e152b4e4d03dfe423ffafa9c"
+dependencies = [
+ "curve25519-dalek",
+ "solana-zk-elgamal-proof-interface",
+ "solana-zk-sdk 7.0.1",
+ "solana-zk-sdk-pod",
  "thiserror 2.0.21",
 ]
 
@@ -7512,6 +7577,7 @@ name = "tests-dvp-swap-program"
 version = "0.1.0"
 dependencies = [
  "borsh 1.8.1",
+ "bytemuck",
  "dvp-swap-program-client",
  "litesvm",
  "serde_json",
@@ -7520,6 +7586,7 @@ dependencies = [
  "solana-clock 3.1.1",
  "solana-instruction 3.4.1",
  "solana-keypair",
+ "solana-message",
  "solana-nullable",
  "solana-packet",
  "solana-program-option 3.1.0",
@@ -7527,10 +7594,16 @@ dependencies = [
  "solana-pubkey 4.2.1",
  "solana-sdk-ids 3.1.0",
  "solana-signer 3.0.1",
+ "solana-system-interface 3.2.0",
  "solana-transaction",
+ "solana-zk-elgamal-proof-interface",
+ "solana-zk-sdk 7.0.1",
+ "solana-zk-sdk-pod",
  "spl-associated-token-account-interface",
  "spl-tlv-account-resolution 0.11.4",
  "spl-token-2022-interface",
+ "spl-token-confidential-transfer-proof-extraction 0.6.1",
+ "spl-token-confidential-transfer-proof-generation 0.6.1",
  "spl-token-interface",
  "spl-transfer-hook-interface 2.1.0",
  "wincode",

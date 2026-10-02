@@ -2,11 +2,9 @@
 
 use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
 
-use crate::{
-    error::DvpSwapProgramError, processor::shared::confidential_types::LegBRefund,
-    processor::shared::token_utils::has_confidential_transfer_account,
-    state::swap_dvp::ConfidentialSwapDvp,
-};
+use super::{has_confidential_transfer_account, LegBRefund};
+
+use crate::{error::DvpSwapProgramError, state::swap_dvp::ConfidentialSwapDvp};
 
 #[inline(always)]
 fn check_optional(info: &AccountView, present: bool, program_id: &Address) -> ProgramResult {
@@ -74,7 +72,7 @@ pub fn check_confidential_escrow(escrow: &AccountView) -> ProgramResult {
 mod tests {
     extern crate alloc;
     use super::*;
-    use crate::processor::shared::confidential_types::{CtTransferData, AE_CIPHERTEXT_LEN};
+    use crate::processor::shared::confidential::{CtTransferData, AE_CIPHERTEXT_LEN};
     use crate::processor::{
         process_apply_confidential_dvp, process_cancel_confidential_dvp,
         process_reclaim_confidential_dvp, process_recover_confidential_dvp,
