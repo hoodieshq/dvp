@@ -1,10 +1,10 @@
 # DvP Confidential Transfer: Program Specification
 
-**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the first implementation PR provides test infrastructure only.
+**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts and instruction ABI checks. Confidential execution remains disabled.
 
-**Source baseline.** Program sources at `solana-foundation/dvp` main `9103afe`, plus the program id change on `dev` (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
+**Source baseline.** Program sources at `solana-foundation/dvp` main `dfd47bf`, including the deployed program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
 
-**Release baseline.** This work targets an in-place, backward-compatible upgrade. "Mainnet release" below means the deployed binary and its published clients; its exact commit/tag and program id must be confirmed before release. Until then, compatibility is checked against `9103afe`.
+**Release baseline.** This work targets an in-place, backward-compatible upgrade. "Mainnet release" below means the deployed binary and its published clients; its exact commit/tag and program id must be confirmed before release. Until then, compatibility is checked against `dfd47bf`.
 
 ## 1. Purpose
 
@@ -170,14 +170,14 @@ In a confidential swap the base field `amount_b` holds `u64::MAX` and is never r
 
 The escrow ElGamal key is not stored in `SwapDvp`; it is read from the escrow ATA's `ConfidentialTransferAccount`.
 
-Program-side loading: `SwapDvp::try_from_bytes` (today `len >= 458`) is replaced by two loaders:
+Program-side loading: the baseline `SwapDvp::try_from_bytes` (`len >= 458`) is replaced by two loaders:
 
-- `SwapDvp::load_public`: requires `len == 458`; a 586-byte account fails with `SwapModeMismatch`. Used by ReclaimDvp, SettleDvp, CancelDvp and RejectDvp.
-- `SwapDvp::load_confidential`: requires `len == 586`; a 458-byte account fails with `SwapModeMismatch`. Returns the base plus the tail. Used by the confidential instructions.
+- `SwapDvp::load`: requires `len == 458`; a 586-byte account fails with `SwapModeMismatch`. Used by ReclaimDvp, SettleDvp, CancelDvp and RejectDvp.
+- `ConfidentialSwapDvp::load`: requires `len == 586`; a 458-byte account fails with `SwapModeMismatch`. Returns `base: SwapDvp` plus the two ciphertext fields. Used by the confidential instructions.
 
 Any other length fails with `InvalidAccountData` (table above).
 
-`SwapDvp::LEN` stays 458; add `SwapDvp::LEN_CONFIDENTIAL = 586`.
+`SwapDvp::LEN` stays 458; add `ConfidentialSwapDvp::LEN = 586`.
 
 ### 5.2 Other accounts
 
@@ -216,7 +216,7 @@ Grouped ciphertext = commitment 32 ‖ handle_source 32 ‖ handle_dest 32 ‖ h
 **Amount binding (Settle only).** With `validity` = the payment transfer's validity context and `pk_escrow` = the ElGamal key read from the escrow ATA:
 
 1. `validity.pk_source == pk_escrow`.
-2. For `eq_lo`: `first_pubkey == second_pubkey == pk_escrow`; `first_ct == validity.grouped_lo[0..64]`; `second_ct == SwapDvp.amount_b_ciphertext_lo`.
+2. For `eq_lo`: `first_pubkey == second_pubkey == pk_escrow`; `first_ct == validity.grouped_lo[0..64]`; `second_ct == ConfidentialSwapDvp.amount_b_ciphertext_lo`.
 3. Same for `eq_hi` with `grouped_hi` and `amount_b_ciphertext_hi`.
 4. The same `validity` account (by position) is the one passed into the CT `Transfer` CPI.
 
@@ -256,7 +256,7 @@ The mainnet instructions keep their wire format and logic; their only edits are 
 
 ### 7.2 Conventions for the confidential instructions
 
-- **`CtTransferData`** (164 bytes), used wherever the program issues a CT `Transfer`: `new_source_decryptable_available_balance [36]`, `auditor_ciphertext_lo [64]`, `auditor_ciphertext_hi [64]`. Forwarded verbatim into Token-2022 `Transfer` data with all proof offsets = 0.
+- **`CtTransferData`** (`CtTransferData::LEN = 164` bytes), used wherever the program issues a CT `Transfer`: `new_source_decryptable_available_balance [36]`, `auditor_ciphertext_lo [64]`, `auditor_ciphertext_hi [64]`. Forwarded verbatim into Token-2022 `Transfer` data with all proof offsets = 0.
 - **CT transfer contexts**, in this order: equality (type 3), validity (type 12), range (type 7).
 - **Optional accounts** use the program-id placeholder: an absent optional account is passed as the DvP program id (Metaplex/Codama `optionalAccountStrategy: programId`). Each group of optional accounts goes with an `Option<...>` or a `LegBRefund` mode in the data, which says whether real accounts or placeholders are passed; a mismatch → `InvalidInstructionData`. The account list and its length are therefore fixed per instruction.
 - **Transfer-hook extras** follow the fixed list as remaining accounts, exactly as in the public instructions (`leg_a_extras_count` where there are two legs).
@@ -506,7 +506,7 @@ Accounts:
 Steps:
 
 1. Re-derive the `SwapDvp` PDA from the seed inputs; `swap_dvp` must be at that address.
-2. Swap open (program-owned): `load_confidential`; signer is `user_a`, `user_b` or `settlement_authority` of the stored state. Swap closed: the tombstone must exist, as in RecoverDvp; signer is one of the seed-input parties.
+2. Swap open (program-owned): `ConfidentialSwapDvp::load`; signer is `user_a`, `user_b` or `settlement_authority` of the stored state. Swap closed: the tombstone must exist, as in RecoverDvp; signer is one of the seed-input parties.
 3. `dvp_ata_b` is the canonical ATA of the PDA for the seed input `mint_b` and has `ConfidentialTransferAccount`, else `EscrowNotConfidential`.
 4. CPI `ApplyPendingBalance` with the given data, PDA signs. The program does not read or check the decryptable balance.
 
@@ -516,7 +516,7 @@ Only these:
 
 - Entrypoint: discriminators 6-12 dispatch to the new handlers.
 - CreateDvp: none. It always creates a 458-byte public swap.
-- ReclaimDvp, SettleDvp, CancelDvp, RejectDvp: `SwapDvp::try_from_bytes` → `SwapDvp::load_public`. A confidential swap fails with `SwapModeMismatch`.
+- ReclaimDvp, SettleDvp, CancelDvp, RejectDvp: `SwapDvp::try_from_bytes` → `SwapDvp::load`. A confidential swap fails with `SwapModeMismatch`.
 - RecoverDvp: if the escrow carries `ConfidentialTransferAccount`, fail with `SwapModeMismatch` (use RecoverConfidentialDvp). The check makes an otherwise late failure (close on a non-empty CT balance) explicit and early.
 
 ## 8. Transfer hooks on `mint_b`
@@ -537,7 +537,7 @@ Disclaimer for the docs: hook programs that read or limit the amount see `u64::M
 
 ## 9. Errors
 
-Codes continue after the mainnet release's last code (23 at `9103afe`; re-check at release).
+Codes continue after the mainnet release's last code (23 at `dfd47bf`; re-check at release).
 
 | Error | When |
 | --- | --- |
@@ -674,7 +674,7 @@ Negative cases:
 | Public balance in escrow B before Create | `EscrowPublicBalanceNotEmpty` |
 | `amount_b >= 2^48` | rejected by the client check (4.4) |
 
-Mode separation: instructions 1-4 on a confidential swap, RecoverDvp on a CT escrow, and 7-10 on a public swap fail with `SwapModeMismatch`; RecoverConfidentialDvp and Apply on a public escrow of a closed swap fail with `EscrowNotConfidential`. Nothing changes in either case. RecoverDvp still recovers leg A of a closed confidential swap.
+Mode separation: instructions 1-4 on a confidential swap, RecoverDvp on a CT escrow, and 7-10 or 12 on an open public swap fail with `SwapModeMismatch`; RecoverConfidentialDvp and Apply on a public escrow of a closed swap fail with `EscrowNotConfidential`. Nothing changes in either case. RecoverDvp still recovers leg A of a closed confidential swap.
 
 Transfer hooks:
 
@@ -691,7 +691,7 @@ Compatibility:
 - The full mainnet-release test suite passes unchanged on the new binary.
 - Golden bytes: each of instructions 0-5 built by the mainnet-release client (pinned version) equals the bytes the new client builds, and succeeds against the new binary.
 - Accounts written by the mainnet binary (458 bytes, `earliest` Some and None, with and without hooks) go through every public instruction on the new binary.
-- `SwapDvp` of any length other than 0 / 458 / 586 is rejected.
+- Swap loaders reject any length other than 458 / 586; zero-length accounts are nonce tombstones, not swaps.
 - Rollback: confidential swaps created by the new binary, then processed by the mainnet binary: Settle fails; Cancel and Reject fail while escrow B is funded and close the swap when it is empty; no CT-held leg B funds move (section 11).
 - The upgraded client decodes 458 and 586 bytes; the mainnet-release `verify` helpers reject 586.
 

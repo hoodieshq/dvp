@@ -2,8 +2,8 @@ use crate::{
     error::DvpSwapProgramError,
     processor::shared::account_check::{verify_account_owner, verify_signer, verify_token_program},
     processor::shared::token_utils::{
-        get_mint_decimals, get_token_account_balance, transfer_checked_cpi,
-        verify_ata_recipient_if_initialized, verify_canonical_ata,
+        get_mint_decimals, get_token_account_balance, has_confidential_transfer_account,
+        transfer_checked_cpi, verify_ata_recipient_if_initialized, verify_canonical_ata,
     },
     require, require_len,
     state::swap_dvp::{NONCE_TOMBSTONE_SEED, SWAP_DVP_SEED},
@@ -172,6 +172,10 @@ pub fn process_recover_dvp(
         token_program_info,
     )?;
     verify_account_owner(dvp_escrow_ata_info, token_program_info.address())?;
+    require!(
+        !has_confidential_transfer_account(dvp_escrow_ata_info)?,
+        DvpSwapProgramError::SwapModeMismatch
+    );
     // signer_dest_ata: the depositor's ATA for the leg's mint.
     verify_canonical_ata(
         signer_dest_ata_info,

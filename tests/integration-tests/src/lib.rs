@@ -21,3 +21,9 @@ mod test_settle_dvp;
 mod test_smart_wallet_party;
 #[cfg(test)]
 mod test_token_2022;
+
+#[cfg(test)]
+mod test_modes;
+
+#[cfg(test)]
+mod test_public_abi;
