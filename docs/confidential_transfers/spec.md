@@ -10,7 +10,7 @@
 
 Add an optional mode to DvP in which leg B (`mint_b`, `amount_b`, the payment) moves through the Token-2022 Confidential Transfer (CT) extension. The amount and the escrow balance exist on-chain only as ciphertexts, readable by `user_a`, `user_b` and `settlement_authority`. Leg A stays public.
 
-Preserved properties: atomic Settle; the Settle payment equals the agreed amount, enforced by the program, not by trusting the authority; each party recovers its own funds without third parties; funding without calling the program.
+Preserved properties: atomic Settle; the Settle payment equals the agreed amount, enforced by the program, not by trusting the authority; each party authorizes recovery of its own funds without the other parties, subject to the seed and mint restrictions in section 10; funding without calling the program.
 
 ## 2. Requirements and limits
 
@@ -533,7 +533,7 @@ What the client does:
 - Builds hooked Settle only in the v1 transaction format. This is the supported scope: the size of a hooked Settle in v0 depends on the hook's extra accounts and has not been measured (section 12).
 - The Settle surplus transfer reuses leg B's extras with a different destination, the same limitation the public mode documents today ("TransferHook + over-deposit").
 
-Disclaimer for the docs: hook programs that read or limit the amount see `u64::MAX` and may reject; such mints cannot be used in confidential mode. The buyer's own funding transfer into escrow also triggers the hook; that is between the buyer and the mint.
+Hook programs that read or limit the amount see `u64::MAX` and may reject. The buyer's own funding transfer into escrow also triggers the hook. Successful funding does not guarantee that subsequent transfers remain possible: the hook authority can change the hook after funding, or the hook can change its behavior. If it rejects the sentinel, Settle and all CT refund paths fail atomically. Returning leg B then depends on the hook accepting the transfer again; DvP cannot bypass it. Leg A remains independently reclaimable if its own mint and destination permit the transfer.
 
 ## 9. Errors
 
@@ -562,13 +562,15 @@ Codes continue after the mainnet release's last code (23 at `dfd47bf`; re-check 
 3. After a confidential Settle or a `Full` refund the escrow's available balance is proven zero by a ZeroCiphertext context the program checks itself; no surplus is left behind. A `Partial` refund moves funds only to `user_b`'s canonical ATA.
 4. Every context account is owned by the ZK program, of exact length and type, its authority is the signer, and closed in the same instruction.
 5. No terminal instruction applies pending; a credit to the escrow's pending balance, from anyone, cannot invalidate prepared proofs or block Settle and refunds. Only parties can Apply.
-6. Each party can refund its leg without the others, as in the public mode, given the seed.
+6. Each party can authorize refund of its leg without the other parties, as in the public mode, given the seed. Execution still depends on the mint's restrictions, including its hook and freeze state, and a ready destination account.
 7. Public and confidential instructions never operate on the other mode's swap (5.1); the mode comes from on-chain state.
 8. Public instructions behave exactly as the mainnet release, and every `SwapDvp` created by the mainnet release stays fully operable after the upgrade (section 11).
 9. A confidential swap processed by the mainnet binary (rollback) cannot settle and cannot release CT-held leg B funds, except through the mint authority's own public mint (section 11).
 
 Known limitations, not prevented by the program:
 
+- `Partial` proves a valid transfer, not a positive amount or exhaustion of available funds. In particular, valid `Partial(0)` proofs can close the swap through Cancel or Reject while leaving all available B in escrow. Only `user_b` can recover the remainder, bearing the cost of fresh proofs and Recover transactions (7.7). This cannot redirect B to another recipient.
+- A hook authority or changed hook behavior can block CT transfers after successful funding, including Reclaim and Recover of leg B (section 8). Atomic rollback protects balances but does not guarantee eventual recovery. Preparatory proof contexts from earlier transactions remain open after a failed final transaction and require separate cleanup by their authority.
 - A party can invalidate prepared Settle proofs by calling Apply after a pending credit; the proofs are rebuilt. The same party could abort the swap with Reject anyway.
 - Metadata stays public: which instruction was used, account sizes and counts, whether there was a surplus, timing.
 - The mint auditor, if configured, sees all amounts.
@@ -679,7 +681,7 @@ Mode separation: instructions 1-4 on a confidential swap, RecoverDvp on a CT esc
 Transfer hooks:
 
 - A hooked `mint_b` through Settle (with and without surplus) and every unwind path, in v1.
-- A hook that rejects `u64::MAX` fails cleanly.
+- After successful funding, update the mint's hook through Token-2022 to one that rejects `u64::MAX`. Settle, Cancel, Reject, Reclaim B and Recover B must reach that hook's rejection and leave swap, escrows, recipients and prepared proof contexts unchanged. This is an atomic failure, not a guarantee of later recovery. Reclaim A must still succeed when leg A itself is transferable.
 
 Keys:
 

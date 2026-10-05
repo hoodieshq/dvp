@@ -23,7 +23,7 @@ const PUBLIC_B: u64 = 11;
 
 #[test]
 fn full_terminal_refund_preserves_late_pending_then_apply_and_recover_drain_it() {
-    for public in [0, PUBLIC_B] {
+    for (public, late_recover) in [(0, 0), (PUBLIC_B, 0), (0, LATE_B), (PUBLIC_B, LATE_B)] {
         let mut context = TestContext::new();
         let (f, keys) = setup_refund(&mut context, AMOUNT_A, AMOUNT_B, false);
         let refund = prepare_refund(
@@ -78,8 +78,45 @@ fn full_terminal_refund_preserves_late_pending_then_apply_and_recover_drain_it()
             LATE_B,
             true,
         );
+        if late_recover > 0 {
+            fund_late_b(&mut context, &f, late_recover);
+        }
+        let before = state(&context, &f.accounts.dvp_ata_b);
         send_v1(&mut context, &[recover(&f, &refund, &[])], &[&f.user_b]).unwrap();
         assert_contexts_closed(&context, &refund);
+        if late_recover > 0 {
+            assert_eq!(available(&context, &f), 0);
+            let after = state(&context, &f.accounts.dvp_ata_b);
+            assert_eq!(after.pending_balance_lo, before.pending_balance_lo);
+            assert_eq!(after.pending_balance_hi, before.pending_balance_hi);
+            assert_eq!(u64::from(after.pending_balance_credit_counter), 1);
+            assert_eq!(
+                pending(&context, &f.accounts.dvp_ata_b, &f.keys),
+                late_recover
+            );
+            send_v1(
+                &mut context,
+                &[f.apply(f.user_b.pubkey(), late_recover).instruction()],
+                &[&f.user_b],
+            )
+            .unwrap();
+            let final_refund = prepare_refund(
+                &mut context,
+                &f,
+                &keys,
+                f.user_b.pubkey(),
+                late_recover,
+                late_recover,
+                true,
+            );
+            send_v1(
+                &mut context,
+                &[recover(&f, &final_refund, &[])],
+                &[&f.user_b],
+            )
+            .unwrap();
+            assert_contexts_closed(&context, &final_refund);
+        }
         if public > 0 {
             assert_eq!(get_token_balance(&context, &f.accounts.dvp_ata_b), public);
             send_v1(
@@ -97,7 +134,7 @@ fn full_terminal_refund_preserves_late_pending_then_apply_and_recover_drain_it()
                 &dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
                 &keys
             ),
-            AMOUNT_B + LATE_B
+            AMOUNT_B + LATE_B + late_recover
         );
     }
 }
@@ -423,4 +460,43 @@ fn handles_two_credits_of_two_to_the_47() {
     send_v1(&mut context, &[ix], &[&f.user_b]).unwrap();
     assert_contexts_closed(&context, &full);
     assert!(context.get_account(&f.accounts.dvp_ata_b).is_none());
+}
+
+#[test]
+fn hook_changed_after_funding_rejects_atomically() {
+    use crate::confidential_utils::{send_and_assert_hook_rejection, switch_to_rejecting_hook};
+
+    let mut context = TestContext::new();
+    let (f, keys) = setup_refund(&mut context, AMOUNT_A, AMOUNT_B, true);
+    let partial = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        f.authority.pubkey(),
+        AMOUNT_B,
+        PARTIAL_B,
+        false,
+    );
+    let ix = terminal(
+        &f,
+        f.authority.pubkey(),
+        &partial,
+        true,
+        &hook_extras_for_mint(&f.accounts.mint_b),
+    );
+    send_v1(&mut context, &[ix], &[&f.authority]).unwrap();
+    assert_contexts_closed(&context, &partial);
+    assert!(context.get_account(&f.accounts.swap_dvp).is_none());
+    assert_eq!(available(&context, &f), AMOUNT_B - PARTIAL_B);
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        f.user_b.pubkey(),
+        AMOUNT_B - PARTIAL_B,
+        AMOUNT_B - PARTIAL_B,
+        true,
+    );
+    let extras = switch_to_rejecting_hook(&mut context, &f.accounts.mint_b);
+    send_and_assert_hook_rejection(&mut context, recover(&f, &refund, &extras), &f.user_b);
 }

@@ -365,3 +365,24 @@ fn full_refund_with_mint_auditor_closes_escrows_and_proofs() {
     }
     assert!(context.get_account(&f.accounts.nonce_tombstone).is_some());
 }
+
+#[test]
+fn hook_changed_after_funding_rejects_atomically() {
+    use crate::confidential_utils::{send_and_assert_hook_rejection, switch_to_rejecting_hook};
+
+    let mut context = TestContext::new();
+    let (f, keys) = setup_refund(&mut context, AMOUNT_A, AMOUNT_B, true);
+    let signer = &f.authority;
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        signer.pubkey(),
+        AMOUNT_B,
+        AMOUNT_B,
+        true,
+    );
+    let extras = switch_to_rejecting_hook(&mut context, &f.accounts.mint_b);
+    let ix = terminal(&f, signer.pubkey(), &refund, true, &extras);
+    send_and_assert_hook_rejection(&mut context, ix, signer);
+}

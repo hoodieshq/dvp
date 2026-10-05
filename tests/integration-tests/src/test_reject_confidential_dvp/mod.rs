@@ -1,8 +1,8 @@
 use crate::{
     confidential_utils::{
-        assert_contexts_closed, assert_failure, available, fund_b, mint_public, pending,
-        prepare_refund, recover, send_v1, setup_large_refund, setup_refund, terminal,
-        ConfidentialDvpFixture, Refund, DECIMALS, LO_BITS,
+        assert_contexts_closed, assert_failure, available, fund_b, fund_late_b, mint_public,
+        pending, prepare_refund, recover, send_v1, setup_large_refund, setup_refund, state,
+        terminal, ConfidentialDvpFixture, Refund, DECIMALS, LO_BITS,
     },
     state_utils::AMOUNT_A,
     utils::{
@@ -19,6 +19,64 @@ const AMOUNT_B: u64 = (3 << LO_BITS) + 42;
 const PARTIAL_B: u64 = 19;
 const LATE_B: u64 = 7;
 const PUBLIC_B: u64 = 11;
+
+#[test]
+fn full_reject_preserves_credit_arriving_after_proof_preparation() {
+    let mut context = TestContext::new();
+    let (f, keys) = setup_refund(&mut context, AMOUNT_A, AMOUNT_B, false);
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        f.user_a.pubkey(),
+        AMOUNT_B,
+        AMOUNT_B,
+        true,
+    );
+    fund_late_b(&mut context, &f, LATE_B);
+    let before = state(&context, &f.accounts.dvp_ata_b);
+    let rent: u64 = [f.accounts.swap_dvp, f.accounts.dvp_ata_a]
+        .iter()
+        .chain(refund.contexts.iter().flatten())
+        .map(|a| context.get_account(a).unwrap().lamports)
+        .sum();
+    let signer_lamports = context.get_account(&f.user_a.pubkey()).unwrap().lamports;
+    send_v1(
+        &mut context,
+        &[terminal(&f, f.user_a.pubkey(), &refund, false, &[])],
+        &[&f.user_a],
+    )
+    .unwrap();
+    assert_contexts_closed(&context, &refund);
+    assert!(context.get_account(&f.accounts.swap_dvp).is_none());
+    assert!(context.get_account(&f.accounts.dvp_ata_a).is_none());
+    assert!(context.get_account(&f.accounts.nonce_tombstone).is_some());
+    assert_eq!(
+        context.get_account(&f.user_a.pubkey()).unwrap().lamports,
+        signer_lamports + rent
+    );
+    assert_eq!(available(&context, &f), 0);
+    let after = state(&context, &f.accounts.dvp_ata_b);
+    assert_eq!(after.pending_balance_lo, before.pending_balance_lo);
+    assert_eq!(after.pending_balance_hi, before.pending_balance_hi);
+    assert_eq!(u64::from(after.pending_balance_credit_counter), 1);
+    assert_eq!(pending(&context, &f.accounts.dvp_ata_b, &f.keys), LATE_B);
+    assert_eq!(
+        pending(
+            &context,
+            &dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
+            &keys
+        ),
+        AMOUNT_B
+    );
+    assert_eq!(
+        get_token_balance(
+            &context,
+            &dvp_ata(&f.user_a.pubkey(), &f.accounts.mint_a, &TOKEN_PROGRAM_ID)
+        ),
+        AMOUNT_A
+    );
+}
 
 #[test]
 fn refunds_both_legs_after_expiry_and_pays_rent_to_each_authorized_signer() {
@@ -346,4 +404,25 @@ fn none_unwinds_empty_escrow_after_real_mint_close_and_recreation() {
         assert!(context.get_account(&address).is_none());
     }
     assert!(context.get_account(&f.accounts.nonce_tombstone).is_some());
+}
+
+#[test]
+fn hook_changed_after_funding_rejects_atomically() {
+    use crate::confidential_utils::{send_and_assert_hook_rejection, switch_to_rejecting_hook};
+
+    let mut context = TestContext::new();
+    let (f, keys) = setup_refund(&mut context, AMOUNT_A, AMOUNT_B, true);
+    let signer = &f.user_a;
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        signer.pubkey(),
+        AMOUNT_B,
+        AMOUNT_B,
+        true,
+    );
+    let extras = switch_to_rejecting_hook(&mut context, &f.accounts.mint_b);
+    let ix = terminal(&f, signer.pubkey(), &refund, false, &extras);
+    send_and_assert_hook_rejection(&mut context, ix, signer);
 }

@@ -992,6 +992,20 @@ fn revalidates_both_mints_before_any_transfer() {
         context.svm.set_account(address, original).unwrap();
     }
     let original = context.get_account(&accounts.mint_b).unwrap();
+    // Deliberate layout substitution exercises the guard; removing a live
+    // mint's confidential extension is not a Token-2022 operation.
+    crate::utils::set_mint(&mut context, &accounts.mint_b, &TOKEN);
+    assert_failure(
+        &mut context,
+        &f,
+        ix.clone(),
+        InstructionError::Custom(Error::MintNotConfidential as u32),
+        true,
+    );
+    context
+        .svm
+        .set_account(accounts.mint_b, original.clone())
+        .unwrap();
     crate::utils::set_mint_2022_with_transfer_fee(
         &mut context,
         &accounts.mint_b,
@@ -1270,4 +1284,23 @@ fn auditor_payment_and_surplus_reject_mismatched_ciphertext_atomically() {
     for address in [accounts.swap_dvp, accounts.dvp_ata_a, accounts.dvp_ata_b] {
         assert!(context.get_account(&address).is_none());
     }
+}
+
+#[test]
+fn hook_changed_after_funding_rejects_atomically() {
+    use crate::confidential_utils::{send_and_assert_hook_rejection, switch_to_rejecting_hook};
+
+    let mut context = TestContext::new();
+    let (f, mut accounts, destination_keys, refund_keys) = setup(&mut context, 17, 9, true, false);
+    let mut ix = prepare_settle(
+        &mut context,
+        &f,
+        &mut accounts,
+        &destination_keys,
+        &refund_keys,
+        Some(9),
+    );
+    ix.accounts
+        .extend(switch_to_rejecting_hook(&mut context, &f.accounts.mint_b));
+    send_and_assert_hook_rejection(&mut context, ix, &f.authority);
 }

@@ -33,8 +33,6 @@ use pinocchio_associated_token_account::instructions::CreateIdempotent as Create
 /// Max DvP lifetime (one year) as a duration from creation. Caps escrow rent lock-up.
 const MAX_DVP_DURATION_SECS: i64 = 365 * 24 * 60 * 60;
 
-const FIXED_ACCOUNTS_LEN: usize = 15;
-
 /// Processes the CreateConfidentialDvp instruction.
 ///
 /// Confidential counterpart of [`process_create_dvp`](super::create_dvp::process_create_dvp):
@@ -59,12 +57,8 @@ pub fn process_create_confidential_dvp(
     instruction_data: &[u8],
 ) -> ProgramResult {
     let args = parse_instruction_data(instruction_data)?;
-    require!(
-        accounts.len() >= FIXED_ACCOUNTS_LEN,
-        ProgramError::NotEnoughAccountKeys
-    );
     let [payer_info, swap_dvp_info, nonce_tombstone_info, settlement_authority_info, user_a_info, user_b_info, mint_a_info, mint_b_info, dvp_ata_a_info, dvp_ata_b_info, system_program_info, token_program_a_info, token_program_b_info, associated_token_program_info, instructions_sysvar_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
+        accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
@@ -79,6 +73,10 @@ pub fn process_create_confidential_dvp(
     );
     verify_confidential_mint(mint_b_info)?;
     verify_ata_program(associated_token_program_info)?;
+    require!(
+        instructions_sysvar_info.address() == &pinocchio::sysvars::instructions::INSTRUCTIONS_ID,
+        ProgramError::UnsupportedSysvar
+    );
     // settlement_authority receives the closed-account rent at Settle/Cancel.
     // An executable account can't be credited lamports (ExecutableLamportChange),
     // so reject it at creation rather than stranding funds until Reject/Reclaim.

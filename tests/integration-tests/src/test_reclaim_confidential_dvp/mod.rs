@@ -20,6 +20,53 @@ const LATE_B: u64 = 7;
 const PUBLIC_B: u64 = 11;
 
 #[test]
+fn full_reclaim_preserves_credit_arriving_after_proof_preparation() {
+    let mut context = TestContext::new();
+    let (f, keys) = setup_refund(&mut context, 0, AMOUNT_B, false);
+    let swap = context.get_account(&f.accounts.swap_dvp);
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        f.user_b.pubkey(),
+        AMOUNT_B,
+        AMOUNT_B,
+        true,
+    );
+    fund_late_b(&mut context, &f, LATE_B);
+    let before = state(&context, &f.accounts.dvp_ata_b);
+    send_v1(
+        &mut context,
+        &[reclaim(&f, false, &refund, &[])],
+        &[&f.user_b],
+    )
+    .unwrap();
+    assert_contexts_closed(&context, &refund);
+    assert_eq!(context.get_account(&f.accounts.swap_dvp), swap);
+    assert_eq!(available(&context, &f), 0);
+    let after = state(&context, &f.accounts.dvp_ata_b);
+    assert_eq!(after.pending_balance_lo, before.pending_balance_lo);
+    assert_eq!(after.pending_balance_hi, before.pending_balance_hi);
+    assert_eq!(u64::from(after.pending_balance_credit_counter), 1);
+    assert_eq!(pending(&context, &f.accounts.dvp_ata_b, &f.keys), LATE_B);
+    assert_eq!(
+        pending(
+            &context,
+            &dvp_ata(&f.user_b.pubkey(), &f.accounts.mint_b, &TOKEN),
+            &keys
+        ),
+        AMOUNT_B
+    );
+    send_v1(
+        &mut context,
+        &[f.apply(f.user_b.pubkey(), LATE_B).instruction()],
+        &[&f.user_b],
+    )
+    .unwrap();
+    assert_eq!(available(&context, &f), LATE_B);
+}
+
+#[test]
 fn leg_a_reclaims_independently_of_unavailable_leg_b_and_keeps_trade_open() {
     let mut context = TestContext::new();
     let (f, _) = setup_refund(&mut context, AMOUNT_A + 17, AMOUNT_B, false);
@@ -258,4 +305,44 @@ fn handles_two_credits_of_two_to_the_47() {
         Default::default()
     );
     assert!(context.get_account(&f.accounts.swap_dvp).is_some());
+}
+
+#[test]
+fn hook_changed_after_funding_rejects_atomically() {
+    use crate::confidential_utils::{send_and_assert_hook_rejection, switch_to_rejecting_hook};
+
+    let mut context = TestContext::new();
+    let (f, keys) = setup_refund(&mut context, AMOUNT_A, AMOUNT_B, true);
+    let signer = &f.user_b;
+    let refund = prepare_refund(
+        &mut context,
+        &f,
+        &keys,
+        signer.pubkey(),
+        AMOUNT_B,
+        AMOUNT_B,
+        true,
+    );
+    let extras = switch_to_rejecting_hook(&mut context, &f.accounts.mint_b);
+    let ix = reclaim(&f, false, &refund, &extras);
+    send_and_assert_hook_rejection(&mut context, ix, signer);
+    // Leg A remains independently reclaimable, even before expiry.
+    let swap = context.get_account(&f.accounts.swap_dvp);
+    let escrow_b = context.get_account(&f.accounts.dvp_ata_b);
+    send_v1(
+        &mut context,
+        &[reclaim(&f, true, &Refund::none(), &[])],
+        &[&f.user_a],
+    )
+    .unwrap();
+    assert_eq!(context.get_account(&f.accounts.swap_dvp), swap);
+    assert_eq!(context.get_account(&f.accounts.dvp_ata_b), escrow_b);
+    assert_eq!(get_token_balance(&context, &f.accounts.dvp_ata_a), 0);
+    assert_eq!(
+        get_token_balance(
+            &context,
+            &dvp_ata(&f.user_a.pubkey(), &f.accounts.mint_a, &TOKEN_PROGRAM_ID)
+        ),
+        AMOUNT_A
+    );
 }

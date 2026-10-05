@@ -30,6 +30,34 @@ use spl_token_2022_interface::{
 const CONFIDENTIAL_SWAP_LEN: usize = SWAP_DVP_ACCOUNT_LEN + 2 * 64;
 
 #[test]
+fn create_checks_instructions_sysvar_before_cpi() {
+    let mut context = TestContext::new();
+    let f = ConfidentialDvpFixture::new(&mut context, true, false);
+    let mut instructions = f.create_instructions();
+    instructions[1].accounts[14].pubkey = solana_sdk_ids::sysvar::clock::ID;
+    let failure = send_v1(&mut context, &instructions, &[]).unwrap_err();
+    assert_eq!(
+        failure.err,
+        solana_transaction::TransactionError::InstructionError(
+            1,
+            InstructionError::UnsupportedSysvar,
+        ),
+        "{:?}",
+        failure.meta.logs
+    );
+    assert!(!failure.meta.logs.iter().any(|s| s.contains("invoke [2]")));
+    for address in [
+        f.accounts.swap_dvp,
+        f.accounts.nonce_tombstone,
+        f.accounts.dvp_ata_a,
+        f.accounts.dvp_ata_b,
+    ] {
+        assert!(context.get_account(&address).is_none());
+    }
+    f.create(&mut context);
+}
+
+#[test]
 fn create_configures_escrow_and_preserves_terms() {
     for hook in [false, true] {
         let mut context = TestContext::new();

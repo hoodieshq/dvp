@@ -68,6 +68,92 @@ pub const LO_BITS: usize = 16;
 pub const MAX_PENDING: u64 = 65_536;
 pub const DECIMALS: u8 = 6;
 
+#[path = "../../transfer-hook-fixture/src/constants.rs"]
+mod hook_constants;
+
+const REJECT_CT_HOOK: Pubkey = Pubkey::new_from_array(hook_constants::REJECT_CT_PROGRAM_ID);
+
+/// Change a funded mint's hook using its real authority, with a matching EAML.
+pub fn switch_to_rejecting_hook(context: &mut TestContext, mint: &Pubkey) -> Vec<AccountMeta> {
+    use spl_tlv_account_resolution::state::ExtraAccountMetaList;
+    use spl_transfer_hook_interface::{
+        get_extra_account_metas_address, instruction::ExecuteInstruction,
+    };
+
+    context
+        .svm
+        .add_program(
+            REJECT_CT_HOOK,
+            include_bytes!("../../../target/deploy/transfer_hook_fixture.so"),
+        )
+        .unwrap();
+    let validation = get_extra_account_metas_address(mint, &REJECT_CT_HOOK);
+    let mut data = vec![0; ExtraAccountMetaList::size_of(0).unwrap()];
+    ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &[]).unwrap();
+    context
+        .svm
+        .set_account(
+            validation,
+            Account {
+                lamports: context.svm.minimum_balance_for_rent_exemption(data.len()),
+                data,
+                owner: REJECT_CT_HOOK,
+                ..Account::default()
+            },
+        )
+        .unwrap();
+    let update = spl_token_2022_interface::extension::transfer_hook::instruction::update(
+        &TOKEN,
+        mint,
+        &context.payer.pubkey(),
+        &[],
+        Some(REJECT_CT_HOOK),
+    )
+    .unwrap();
+    send_v1(context, &[update], &[]).unwrap();
+    vec![
+        AccountMeta::new_readonly(REJECT_CT_HOOK, false),
+        AccountMeta::new_readonly(validation, false),
+    ]
+}
+
+pub fn send_and_assert_hook_rejection(
+    context: &mut TestContext,
+    ix: Instruction,
+    signer: &Keypair,
+) {
+    let before: Vec<_> = ix
+        .accounts
+        .iter()
+        .map(|a| (a.pubkey, context.get_account(&a.pubkey)))
+        .collect();
+    let failure = send_v1(context, &[ix], &[signer]).unwrap_err();
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(
+            0,
+            InstructionError::Custom(hook_constants::REJECT_CT_ERROR),
+        ),
+        "{:?}",
+        failure.meta.logs
+    );
+    assert!(failure
+        .meta
+        .logs
+        .iter()
+        .any(|s| s.contains("hook rejects confidential sentinel")));
+    assert!(failure
+        .meta
+        .logs
+        .contains(&format!("Program {REJECT_CT_HOOK} invoke [3]")));
+    // The fee payer is separate from these instruction accounts. Preparatory
+    // proof contexts must survive the failed final transaction unchanged too.
+    for (key, account) in before {
+        assert_ne!(key, context.payer.pubkey());
+        assert_eq!(context.get_account(&key), account, "{key}");
+    }
+}
+
 pub fn send_v1(
     context: &mut TestContext,
     instructions: &[Instruction],

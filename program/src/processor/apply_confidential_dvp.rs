@@ -13,8 +13,6 @@ use pinocchio::{
     Address, ProgramResult,
 };
 
-const FIXED_ACCOUNTS_LEN: usize = 5;
-
 /// Processes the ApplyConfidentialDvp instruction.
 ///
 /// Moves the leg B escrow's pending confidential balance into its available
@@ -44,12 +42,8 @@ pub fn process_apply_confidential_dvp(
 ) -> ProgramResult {
     let args = parse_instruction_data(instruction_data)?;
 
-    require!(
-        accounts.len() >= FIXED_ACCOUNTS_LEN,
-        ProgramError::NotEnoughAccountKeys
-    );
     let [signer_info, swap_dvp_info, nonce_tombstone_info, dvp_ata_b_info, token_program_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
+        accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
