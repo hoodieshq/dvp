@@ -7,6 +7,7 @@ pub use generated::*;
 
 // Handwritten checked, verify-before-fund helpers (survive client
 // regeneration; the generated readers do not check owner or exact size).
+pub mod confidential;
 pub mod verify;
 
 #[cfg(test)]

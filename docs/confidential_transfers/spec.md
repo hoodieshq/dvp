@@ -1,6 +1,6 @@
 # DvP Confidential Transfer: Program Specification
 
-**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers and all confidential on-chain lifecycle instructions.
+**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers, all confidential on-chain lifecycle instructions and the Rust confidential client. The TypeScript confidential client remains a later stage.
 
 **Source baseline.** Program sources at `solana-foundation/dvp` main `dfd47bf`, including the deployed program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
 
@@ -67,7 +67,7 @@ const sharedSeed = createHmac("sha256", seedMasterKey)
   .digest();
 ```
 
-`seed_master_key` is at least 32 bytes and lives in the operator's KMS/HSM; there the same value is one `GenerateMac` (HMAC-SHA256) call over `tag || swap_dvp`, and the key never leaves the KMS. The snippets take the raw key for clarity; the client helper `deriveSharedSeed` takes an HMAC callback instead (section 12).
+`seed_master_key` is at least 32 bytes and lives in the operator's KMS/HSM; there the same value is one `GenerateMac` (HMAC-SHA256) call over `tag || swap_dvp`, and the key never leaves the KMS. The snippets take the raw key for clarity; the Rust helper `derive_shared_seed(swap, mac)` takes an HMAC callback instead (section 12).
 
 - `swap_dvp` (the swap's PDA) is known before Create and unique per swap (the nonce tombstone forbids reuse), so each swap gets its own seed without extra state.
 - `seed_master_key` is a dedicated symmetric secret, separate from the `settlement_authority` signing key.
@@ -130,17 +130,22 @@ TypeScript: `@solana/zk-sdk` 0.5.3 has no `PedersenOpening.fromBytes`, which the
 
 ### 4.4 Verification before funding
 
-`verifySwapDvp` / `verify::decode_swap_dvp_account` with `{shared_seed, expected_amount_b}`:
+Before funding, the Rust client uses `verify::verify_confidential_funding` with
+the fetched swap/escrow accounts, keys derived from the shared seed and expected amount B. The lower-level
+`verify_confidential_swap` accepts checked account state and derived keys.
+`verify::decode_swap_dvp_account` only checks the swap owner, layout and PDA and
+returns `SwapDvpAccount`; it does not perform the funding checks below. The planned
+TypeScript `verifySwapDvp` counterpart must enforce the same checks:
 
 1. The escrow ATA's `ConfidentialTransferAccount.elgamal_pubkey` equals `escrow_elgamal.pubkey`.
-2. The escrow ATA's `ConfidentialTransferAccount.approved` is `true`.
+2. The escrow ATA's `ConfidentialTransferAccount.approved` and `allow_confidential_credits` are both `true`.
 3. Recomputed `Enc(lo)`, `Enc(hi)` equal the stored bytes.
 4. `0 < expected_amount_b < 2^48`.
-5. The escrow's `decryptable_available_balance` decrypts under `escrow_ae` (catches a wrong AE key before it matters).
+5. The escrow's `decryptable_available_balance` decrypts under `escrow_ae`, and that value matches the available ElGamal ciphertext. An authenticated but false AE value fails verification; repair it through a verified Apply before funding.
 
 ### 4.5 Test vectors
 
-The clients ship a vectors file (`clients/test-vectors/confidential-amount-b.json`) with at least: `seed_master_key + swap_dvp → shared_seed`; `shared_seed → elgamal pubkey, elgamal secret, ae key, opening_lo, opening_hi`; `(shared_seed, amount_b) → Enc(lo), Enc(hi)` for `amount_b ∈ {1, 2^16 − 1, 2^16, 2^48 − 1}`. Rust and TypeScript tests both assert them.
+The clients ship a vectors file (`clients/test-vectors/confidential-amount-b.json`) with at least: `seed_master_key + swap_dvp → shared_seed`; `shared_seed → elgamal pubkey, elgamal secret, ae key, opening_lo, opening_hi`; `(shared_seed, amount_b) → Enc(lo), Enc(hi)` for `amount_b ∈ {1, 2^16 − 1, 2^16, 2^48 − 1}`. Rust tests assert them; TypeScript checks remain planned.
 
 ### 4.6 Seed loss
 
@@ -286,7 +291,7 @@ Tags 0 and 1 encode like `Option<CtTransferData>`. A CT transfer carries at most
 
 | Mode | Transfer contexts | Zero context | Effect |
 | --- | --- | --- | --- |
-| `None` | placeholders | placeholder | no CT transfer; public balance withdrawal (below) |
+| `None` | placeholders | placeholder | no CT transfer; public balance withdrawal only in Reclaim/Recover (below) |
 | `Full` | real | real | the full available balance; zero check and reset of escrow B |
 | `Partial` | real | placeholder | part of the available balance; escrow B stays open |
 
@@ -529,8 +534,8 @@ What the program does:
 
 What the client does:
 
-- Resolves the hook's `ExtraAccountMetaList` with `amount = u64::MAX` and the CT transfer's source/destination/authority (authority = the `SwapDvp` PDA).
-- Builds hooked Settle only in the v1 transaction format. This is the supported scope: the size of a hooked Settle in v0 depends on the hook's extra accounts and has not been measured (section 12).
+- Resolves the hook's `ExtraAccountMetaList` with `amount = u64::MAX` and the CT transfer's source/destination/authority (authority = the wallet for funding, the `SwapDvp` PDA for escrow withdrawals).
+- Builds Settle with hook extras on either leg only in the v1 transaction format. This is the supported scope: the size of a hooked Settle in v0 depends on the hook's extra accounts and has not been measured (section 12).
 - The Settle surplus transfer reuses leg B's extras with a different destination, the same limitation the public mode documents today ("TransferHook + over-deposit").
 
 Hook programs that read or limit the amount see `u64::MAX` and may reject. The buyer's own funding transfer into escrow also triggers the hook. Successful funding does not guarantee that subsequent transfers remain possible: the hook authority can change the hook after funding, or the hook can change its behavior. If it rejects the sentinel, Settle and all CT refund paths fail atomically. Returning leg B then depends on the hook accepting the transfer again; DvP cannot bypass it. Leg A remains independently reclaimable if its own mint and destination permit the transfer.
@@ -575,7 +580,7 @@ Known limitations, not prevented by the program:
 - Metadata stays public: which instruction was used, account sizes and counts, whether there was a surplus, timing.
 - The mint auditor, if configured, sees all amounts.
 - `user_b` can block Cancel and Reject indefinitely by making its own `mint_b` ATA not ready (for example, disabling confidential credits). `user_a` still reclaims leg A, but the swap cannot close.
-- Any party can write a wrong `new_decryptable_available_balance` through Apply. The others then rebuild the escrow balance from its transaction history; direct ElGamal decryption only works up to 32 bits.
+- Any party can write a wrong `new_decryptable_available_balance` through Apply. The others can rebuild the escrow balance from complete transaction history and the proof data used by those transactions; direct ElGamal decoding only works up to 32 bits. Rust replays inline proofs, SPL Record writes and ConfidentialMint/Burn. Proofs stored by other programs require historical account bytes through `BalanceHistory::push_with_proof_accounts`; ordinary RPC transaction metadata alone does not contain them. Missing data can prevent recovery of an unknown large balance. All reconstructed available and pending limbs and the pending counter must match the account snapshot.
 - The mint authority can mint public tokens into escrow B (`MintTo` ignores `DisableNonConfidentialCredits`). They go to `user_b` (7.2), and escrow B stays open until then.
 - A Settle surplus above 2^48 − 1 needs a `Partial` Reclaim by `user_b` first (7.5).
 
@@ -596,41 +601,46 @@ Upgrade checklist:
 
 ## 12. Transactions and client
 
-Settle and refunds of a funded leg B take several transactions: preparatory ones verify the proofs into context accounts, and the final one runs the DvP instruction. Two transaction formats (open question 3):
+Settle and refunds of a funded leg B take several transactions: preparatory ones verify the proofs into context accounts, and the final one runs the DvP instruction. The clients support two transaction formats:
 
 - **v1**, up to 4096 bytes, active on mainnet since 15 September 2026: proofs go inline.
-- **legacy / v0 + lookup table**, up to 1232 bytes: the range proof (1000 bytes of proof data) does not fit and is staged through SPL Record (`recr1L3PCGKLbckBqMNcJhuuyU1zgo8nBhfLVsJNwr5`), which adds transactions.
+- **v0 + lookup table**, up to 1232 bytes: the range proof (1000 bytes of proof data) does not fit and is staged through SPL Record (`recr1L3PCGKLbckBqMNcJhuuyU1zgo8nBhfLVsJNwr5`), which adds transactions.
 
-Measured on a prototype; rows marked "est." are estimates:
+Measured Rust sessions in `test_client_confidential`, with a separate fee payer and the fixture's active lookup tables. Sizes include signatures; final sizes and packing depend on the supplied LUTs:
 
-| Flow | v1 | legacy / v0 + LUT |
+| Flow | v1 | v0 + LUT |
 | --- | --- | --- |
-| Create | 1 tx, 716 bytes, ~37k CU | same |
-| Settle, no surplus | 2 prep + final (1080 bytes) | 6 prep + final (1108 / 555 bytes) |
-| Settle, with surplus (est.) | 3 prep + final | 9-10 prep + final, v0 + LUT only (~750 bytes) |
-| Settle, hooked `mint_b` (est.) | 2-3 prep + final | not supported |
-| Refund of a funded leg B (est.) | 1-2 prep + final | ~4 prep + final |
-| Buyer's funding (a plain CT transfer, not a DvP instruction) | 1 prep + transfer | 4 prep + transfer |
+| Create | 1 tx, 972 bytes | 1 tx, 609 bytes |
+| Apply | 1 tx, 624 bytes | 1 tx, 572 bytes |
+| Settle, no surplus | 1 prep (4096 bytes) + final (1076 bytes) | 5 prep + final (779 bytes) |
+| Settle, with surplus | 2 prep + final (1336 bytes) | 9 prep + final (1039 bytes) |
+| Settle, hooked `mint_b`, surplus and required memos | 2 prep + final (1435 bytes) | not supported |
+| Reclaim, Partial | 1 prep + final (776 bytes) | 4 prep + final (665 bytes) |
+| Reclaim, Full | 1 prep + final (808 bytes) | 4 prep + final (697 bytes) |
+| Cancel/Reject, funded leg B | 1 prep + final (909-941 bytes) | 4 prep + final (674-706 bytes) |
+| Recover, Full | 1 prep + final (1009 bytes) | 4 prep + final (867 bytes) |
+| Recover, None public withdrawal | 1 tx, 717 bytes | 1 tx, 575 bytes |
+| Buyer's funding (a plain CT transfer) | 1 prep + transfer (702 bytes) | 4 prep + transfer (712 bytes) |
 
-- Final Settle: 53.5k CU on the prototype; expected 70-80k without surplus, ~100k with, plus the hook's own cost.
-- One v1 transaction with all six Settle contexts is exactly 4096 bytes, so they are split over two.
-- The implementation re-measures every flow, including hooked Settle and the optional-account placeholders, and updates this table.
+- Final Settle used roughly 70-85k CU without surplus, 105-120k with surplus, and 152k with the test hook and required memos. Preparation stayed below 250k CU per transaction.
+- All six Settle contexts fit in one v1 preparation at exactly 4096 bytes. V0 Record writes reach 1232 bytes; the client checks every transaction against its format's limit.
 
 Requirements:
 
 - v1: set `compute_unit_limit` and `loaded_accounts_data_size_limit` explicitly. Agave treats missing values as 0, and Token-2022 alone loads 1.3 MB.
 - v1: send transactions in base64 (base58 cannot carry a full-size v1 transaction) and read them with `maxSupportedTransactionVersion >= 1` in `getTransaction` / `getBlock`.
-- legacy / v0: preparatory transactions with a range proof used 217.5k CU on the prototype; set `SetComputeUnitLimit` to 250k.
+- v0: set compute and loaded-account limits explicitly through compute-budget instructions. Rust sessions default to 400k CU and 4 MB, with preparation packing bounded by estimated proof cost and wire size.
 
-Client helpers, the same set in Rust and TypeScript:
+Rust client helpers; TypeScript counterparts remain planned:
 
 | Helper | What it does |
 | --- | --- |
-| `deriveSharedSeed(seedMasterKeyMac, swapDvp)` | shared seed (4.1); takes an HMAC callback so the key stays in a KMS |
-| key derivation, `encryptAmountB` | escrow keys and amount ciphertexts from the seed (4.2, 4.3) |
-| `verifySwapDvp` / `verify::decode_swap_dvp_account` | decode 458 or 586 bytes; with `{sharedSeed, expectedAmountB}` also the pre-funding checks (4.4) |
+| Rust `derive_shared_seed(swap, mac)` / planned TS `deriveSharedSeed(seedMasterKeyMac, swapDvp)` | shared seed (4.1); takes an HMAC callback so the key stays in a KMS |
+| Rust `EscrowKeys::from_seed`, `encrypt_amount` / planned TS `encryptAmountB` | escrow keys and amount ciphertexts from the seed (4.2, 4.3) |
+| Rust `verify::decode_swap_dvp_account` | check and decode 458 or 586 bytes into `SwapDvpAccount`; `base()` exposes common fields |
+| Rust `verify::verify_confidential_funding` / planned TS `verifySwapDvp` | pre-funding checks using shared seed and expected amount B (4.4) |
 | escrow balance reader | available and pending balance of escrow B; rebuilt from transaction history when the decryptable balance is wrong |
-| session builders | ordered preparatory and final transactions for Settle and every refund path (`Full`, `Partial`, public balance withdrawal), in v1 or v0 + LUT, with hook extras resolved at `u64::MAX`; Apply is a single transaction. Sending and retries are the caller's |
+| session builders | ordered preparatory and final transactions for Settle and every refund path (`Full`, `Partial`, public balance withdrawal), in v1 or v0 + LUT, with CT hook extras resolved at `u64::MAX` and public-withdrawal extras at the actual public amount; Apply is a single transaction. Sending and retries are the caller's |
 
 In TypeScript, `encryptAmountB` and the Settle builder need `PedersenOpening.fromBytes` in `@solana/zk-sdk` (4.3).
 
@@ -705,5 +715,4 @@ Confidential leg A; the demo application; Mosaic/SDP/Explorer integrations; conf
 
 1. **Seed derivation.** HMAC under an operator-held master key (4.1) is accepted for this design.
 2. **Mainnet baseline.** Exact release commit/tag and last error code (sections 11, 9) remain to be confirmed.
-3. **Transaction formats.** Legacy / v0 support is required wherever feasible when using third-party wallets or signers. A self-sufficient client may use v1 only. The client implementation must settle this scope: v1 avoids SPL Record staging and needs 2-3 preparatory transactions for Settle; legacy / v0 needs 6-10.
-4. **Re-audit.** Solana Foundation will arrange the re-audit; timing remains to be confirmed. Scope: instructions 6-12 and the migration and rollback properties of section 11.
+3. **Re-audit.** Solana Foundation will arrange the re-audit; timing remains to be confirmed. Scope: instructions 6-12 and the migration and rollback properties of section 11.

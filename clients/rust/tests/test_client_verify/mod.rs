@@ -143,7 +143,8 @@ fn checked_decode_accepts_real_dvp_and_derivations_match() {
     // stored terms for the funder to compare against the agreed deal.
     let account = context.get_account(&fixture.swap_dvp).unwrap();
     assert_eq!(account.data.len(), SWAP_DVP_ACCOUNT_LEN);
-    let dvp = decode_swap_dvp_account(&fixture.swap_dvp, &account).unwrap();
+    let decoded = decode_swap_dvp_account(&fixture.swap_dvp, &account).unwrap();
+    let dvp = decoded.base();
     assert_eq!(dvp.amount_a, AMOUNT_A);
     assert_eq!(dvp.amount_b, AMOUNT_B);
     assert_eq!(dvp.bump, bump);

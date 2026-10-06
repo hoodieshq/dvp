@@ -6,7 +6,7 @@
 //! `SwapDvp` lets a funder deposit into an ATA the attacker can drain.
 //!
 //! These helpers require, before treating an account as a canonical `SwapDvp`:
-//! owner is the DvP program, size is exactly [`SWAP_DVP_ACCOUNT_LEN`], and the
+//! owner is the DvP program, size is a supported public/confidential layout, and the
 //! address is the canonical PDA for the decoded terms. [`find_swap_dvp_address`]
 //! and [`find_swap_dvp_escrow_ata`] derive those addresses from agreed terms.
 
@@ -25,6 +25,33 @@ pub const SWAP_DVP_ACCOUNT_LEN: usize = 1  // bump
     + 32 * 2   // mint_a_authority, mint_b_authority
     + 1 + 8; // earliest_settlement_timestamp (tag + payload)
 
+/// Public base followed by the two amount B ciphertexts.
+pub const CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN: usize =
+    SWAP_DVP_ACCOUNT_LEN + 2 * crate::confidential::ELGAMAL_CIPHERTEXT_LEN;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfidentialSwapDvp {
+    pub base: SwapDvp,
+    pub amount_b: crate::confidential::AmountCiphertexts,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SwapDvpAccount {
+    Public(SwapDvp),
+    Confidential(ConfidentialSwapDvp),
+}
+
+impl SwapDvpAccount {
+    /// Shared terms. For a confidential swap, base.amount_b is a sentinel;
+    /// use the seed and agreed amount with verify_confidential_swap instead.
+    pub fn base(&self) -> &SwapDvp {
+        match self {
+            Self::Public(base) => base,
+            Self::Confidential(state) => &state.base,
+        }
+    }
+}
+
 /// Seed prefix for the `SwapDvp` PDA (matches `SWAP_DVP_SEED` on-chain).
 pub const SWAP_DVP_SEED: &[u8] = b"dvp";
 
@@ -39,6 +66,8 @@ pub enum SwapDvpVerifyError {
     WrongOwner { expected: Pubkey, actual: Pubkey },
     /// Account data is not exactly [`SWAP_DVP_ACCOUNT_LEN`] bytes.
     WrongSize { expected: usize, actual: usize },
+    /// Neither supported layout length matched.
+    UnsupportedSize { actual: usize },
     /// Account data could not be parsed as a `SwapDvp`.
     Malformed(String),
     /// Account is program-owned but not at its canonical PDA for the
@@ -57,6 +86,8 @@ impl core::fmt::Display for SwapDvpVerifyError {
                 f,
                 "account has {actual} bytes of data; a canonical SwapDvp is exactly {expected} bytes"
             ),
+            SwapDvpVerifyError::UnsupportedSize { actual } => write!(f,
+                "account has {actual} bytes; expected {SWAP_DVP_ACCOUNT_LEN} or {CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN}"),
             SwapDvpVerifyError::Malformed(msg) => {
                 write!(f, "account data is not a valid SwapDvp: {msg}")
             }
@@ -134,13 +165,13 @@ pub fn find_swap_dvp_escrow_ata(
 }
 
 /// Verifies raw account fields (owner, size, layout, canonical PDA) and
-/// returns the decoded `SwapDvp`. Core used by [`decode_swap_dvp_account`];
+/// returns the decoded mode and terms. Core used by [`decode_swap_dvp_account`];
 /// available without the `fetch` feature.
 pub fn verify_swap_dvp_bytes(
     expected_address: &Pubkey,
     owner: &Pubkey,
     data: &[u8],
-) -> Result<SwapDvp, SwapDvpVerifyError> {
+) -> Result<SwapDvpAccount, SwapDvpVerifyError> {
     if *owner != DVP_SWAP_PROGRAM_ID {
         return Err(SwapDvpVerifyError::WrongOwner {
             expected: DVP_SWAP_PROGRAM_ID,
@@ -148,7 +179,28 @@ pub fn verify_swap_dvp_bytes(
         });
     }
 
-    let dvp = SwapDvp::try_from_bytes(data)?;
+    let state = match data.len() {
+        SWAP_DVP_ACCOUNT_LEN => SwapDvpAccount::Public(SwapDvp::try_from_bytes(data)?),
+        CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN => {
+            let base = SwapDvp::try_from_bytes(&data[..SWAP_DVP_ACCOUNT_LEN])?;
+            if base.amount_b != u64::MAX {
+                return Err(SwapDvpVerifyError::Malformed(
+                    "confidential amount B sentinel".into(),
+                ));
+            }
+            let tail = &data[SWAP_DVP_ACCOUNT_LEN..];
+            let (lo, hi) = tail.split_at(crate::confidential::ELGAMAL_CIPHERTEXT_LEN);
+            SwapDvpAccount::Confidential(ConfidentialSwapDvp {
+                base,
+                amount_b: crate::confidential::AmountCiphertexts {
+                    lo: lo.try_into().unwrap(),
+                    hi: hi.try_into().unwrap(),
+                },
+            })
+        }
+        actual => return Err(SwapDvpVerifyError::UnsupportedSize { actual }),
+    };
+    let dvp = state.base();
 
     let (expected_pda, _bump) = find_swap_dvp_address(
         &dvp.settlement_authority,
@@ -165,7 +217,7 @@ pub fn verify_swap_dvp_bytes(
         });
     }
 
-    Ok(dvp)
+    Ok(state)
 }
 
 /// Fetched-account wrapper over [`verify_swap_dvp_bytes`]. Use instead of the
@@ -174,8 +226,73 @@ pub fn verify_swap_dvp_bytes(
 pub fn decode_swap_dvp_account(
     expected_address: &Pubkey,
     account: &solana_account::Account,
-) -> Result<SwapDvp, SwapDvpVerifyError> {
+) -> Result<SwapDvpAccount, SwapDvpVerifyError> {
     verify_swap_dvp_bytes(expected_address, &account.owner, &account.data)
+}
+
+/// Complete funding gate over fetched swap and escrow snapshots. Returns the
+/// checked confidential terms and CT state for the funding session builder.
+#[cfg(feature = "fetch")]
+pub fn verify_confidential_funding(
+    swap_address: &Pubkey,
+    swap_account: &solana_account::Account,
+    escrow_address: &Pubkey,
+    escrow_account: &solana_account::Account,
+    keys: &crate::confidential::EscrowKeys,
+    expected_amount_b: u64,
+) -> Result<
+    (
+        ConfidentialSwapDvp,
+        spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferAccount,
+    ),
+    crate::confidential::ConfidentialError,
+> {
+    use crate::confidential::{read_escrow_account, verify_confidential_swap, ConfidentialError};
+    let SwapDvpAccount::Confidential(swap) = decode_swap_dvp_account(swap_address, swap_account)?
+    else {
+        return Err(ConfidentialError::Account("expected confidential swap"));
+    };
+    let (escrow, _) = read_escrow_account(
+        escrow_address,
+        &escrow_account.owner,
+        &escrow_account.data,
+        swap_address,
+        &swap.base.mint_b,
+    )?;
+    verify_confidential_swap(&swap, &escrow, keys, expected_amount_b)?;
+    Ok((swap, escrow))
+}
+
+/// Query both exact account sizes. Every result is checked against its owner and
+/// canonical PDA before being returned. Fetch escrow snapshots separately for
+/// verify_confidential_swap before funding.
+#[cfg(feature = "fetch")]
+pub fn fetch_swap_dvp_accounts(
+    rpc: &solana_client::rpc_client::RpcClient,
+) -> Result<Vec<(Pubkey, SwapDvpAccount)>, Box<dyn std::error::Error>> {
+    use solana_client::{rpc_config::RpcProgramAccountsConfig, rpc_filter::RpcFilterType};
+    let mut result = Vec::new();
+    for size in [SWAP_DVP_ACCOUNT_LEN, CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN] {
+        let config = RpcProgramAccountsConfig {
+            filters: Some(vec![RpcFilterType::DataSize(size as u64)]),
+            account_config: solana_client::rpc_config::RpcAccountInfoConfig {
+                encoding: Some(solana_account_decoder_client_types::UiAccountEncoding::Base64),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for (address, ui_account) in
+            rpc.get_program_ui_accounts_with_config(&DVP_SWAP_PROGRAM_ID, config)?
+        {
+            let owner: Pubkey = ui_account.owner.parse()?;
+            let data = ui_account
+                .data
+                .decode()
+                .ok_or_else(|| SwapDvpVerifyError::Malformed("RPC account encoding".into()))?;
+            result.push((address, verify_swap_dvp_bytes(&address, &owner, &data)?));
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -332,6 +449,50 @@ mod tests {
         );
         let parsed =
             verify_swap_dvp_bytes(&addr, &DVP_SWAP_PROGRAM_ID, &on_chain_bytes(&dvp)).unwrap();
-        assert_eq!(parsed, dvp);
+        assert_eq!(parsed, SwapDvpAccount::Public(dvp));
+    }
+
+    #[test]
+    fn verify_confidential_layout_and_sentinel() {
+        let mut base = sample();
+        base.amount_b = u64::MAX;
+        let keys = crate::confidential::EscrowKeys::from_seed(&[7; 32]).unwrap();
+        let amount = keys.encrypt_amount(65_536).unwrap();
+        let address = find_swap_dvp_address(
+            &base.settlement_authority,
+            &base.user_a,
+            &base.user_b,
+            &base.mint_a,
+            &base.mint_b,
+            base.nonce,
+        )
+        .0;
+        let mut data = on_chain_bytes(&base);
+        data.extend_from_slice(&amount.lo);
+        data.extend_from_slice(&amount.hi);
+        assert_eq!(
+            verify_swap_dvp_bytes(&address, &DVP_SWAP_PROGRAM_ID, &data).unwrap(),
+            SwapDvpAccount::Confidential(ConfidentialSwapDvp {
+                base: base.clone(),
+                amount_b: amount
+            })
+        );
+        assert!(SwapDvp::try_from_bytes(&data).is_err());
+        for len in [
+            SWAP_DVP_ACCOUNT_LEN - 1,
+            SWAP_DVP_ACCOUNT_LEN + 1,
+            CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN - 1,
+        ] {
+            assert!(matches!(
+                verify_swap_dvp_bytes(&address, &DVP_SWAP_PROGRAM_ID, &data[..len]),
+                Err(SwapDvpVerifyError::UnsupportedSize { .. })
+            ));
+        }
+        base.amount_b = 1;
+        data[..SWAP_DVP_ACCOUNT_LEN].copy_from_slice(&on_chain_bytes(&base));
+        assert!(matches!(
+            verify_swap_dvp_bytes(&address, &DVP_SWAP_PROGRAM_ID, &data),
+            Err(SwapDvpVerifyError::Malformed(_))
+        ));
     }
 }
