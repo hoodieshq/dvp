@@ -2,6 +2,7 @@ extern crate alloc;
 
 use crate::{
     error::DvpSwapProgramError,
+    processor::create_dvp::{verify_party_signer_capable, MAX_DVP_DURATION_SECS},
     processor::shared::account_check::{
         verify_account_owner, verify_ata_program, verify_signer, verify_system_account,
         verify_system_program, verify_token_program,
@@ -29,9 +30,6 @@ use pinocchio::{
     ProgramResult,
 };
 use pinocchio_associated_token_account::instructions::CreateIdempotent as CreateAtaIdempotent;
-
-/// Max DvP lifetime (one year) as a duration from creation. Caps escrow rent lock-up.
-const MAX_DVP_DURATION_SECS: i64 = 365 * 24 * 60 * 60;
 
 /// Processes the CreateConfidentialDvp instruction.
 ///
@@ -439,20 +437,6 @@ fn parse_instruction_data(data: &[u8]) -> Result<CreateConfidentialDvpArgs, Prog
         user_b_settlement_destination,
         earliest_settlement_timestamp,
     })
-}
-
-/// A party must be a wallet-style identity: system-owned and
-/// non-executable. Only such an account can ever authorize the unwind
-/// paths (Reject/Reclaim/Recover) as a signer, either as a keypair or as
-/// a smart-wallet PDA signing via CPI. An account owned by another
-/// program (e.g. an SPL Token multisig) or an executable can never sign,
-/// so a late deposit to its leg would be unrecoverable.
-fn verify_party_signer_capable(info: &AccountView) -> Result<(), ProgramError> {
-    require!(
-        info.owned_by(&pinocchio_system::ID) && !info.executable(),
-        DvpSwapProgramError::PartyNotSignerCapable
-    );
-    Ok(())
 }
 
 /// Reject DvPs that can never settle, are degenerate, or have leg

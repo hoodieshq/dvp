@@ -66,7 +66,7 @@ fn funding_and_apply_by_each_party_open_and_after_close() {
 }
 
 #[test]
-fn apply_checks_signer_seeds_ata_program_and_closed_tombstone() {
+fn apply_checks_signer_seeds_ata_program_and_tombstone() {
     let mut context = TestContext::new();
     let f = ConfidentialDvpFixture::new(&mut context, true, false);
     f.create(&mut context);
@@ -78,6 +78,11 @@ fn apply_checks_signer_seeds_ata_program_and_closed_tombstone() {
         }
         for (index, address, expected) in [
             (1, Pubkey::new_unique(), InstructionError::InvalidSeeds),
+            (
+                2,
+                Pubkey::new_unique(),
+                InstructionError::InvalidAccountData,
+            ),
             (3, f.accounts.dvp_ata_a, InstructionError::InvalidSeeds),
             (4, TOKEN_PROGRAM_ID, InstructionError::IncorrectProgramId),
         ] {
@@ -112,15 +117,6 @@ fn apply_checks_signer_seeds_ata_program_and_closed_tombstone() {
         );
         assert_eq!(context.get_account(&f.accounts.dvp_ata_b), before);
     }
-    let mut wrong_tombstone = f.apply(f.user_a.pubkey(), 0).instruction();
-    wrong_tombstone.accounts[2].pubkey = Pubkey::new_unique();
-    assert_error(
-        &mut context,
-        &[wrong_tombstone],
-        &[&f.user_a],
-        0,
-        InstructionError::InvalidAccountData,
-    );
     context
         .svm
         .set_account(f.accounts.nonce_tombstone, Account::default())

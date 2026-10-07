@@ -71,6 +71,13 @@ pub fn process_apply_confidential_dvp(
         ProgramError::InvalidSeeds
     );
 
+    let (expected_tombstone, _) =
+        Address::find_program_address(&[NONCE_TOMBSTONE_SEED, expected_swap.as_ref()], program_id);
+    require!(
+        nonce_tombstone_info.address() == &expected_tombstone,
+        ProgramError::InvalidAccountData
+    );
+
     if swap_dvp_info.owned_by(program_id) {
         let dvp = ConfidentialSwapDvp::load(&swap_dvp_info.try_borrow()?)?;
         require!(
@@ -85,14 +92,6 @@ pub fn process_apply_confidential_dvp(
         require!(
             swap_dvp_info.owned_by(&pinocchio_system::ID) && swap_dvp_info.is_data_empty(),
             DvpSwapProgramError::DvpStillOpen
-        );
-        let (expected_tombstone, _) = Address::find_program_address(
-            &[NONCE_TOMBSTONE_SEED, expected_swap.as_ref()],
-            program_id,
-        );
-        require!(
-            nonce_tombstone_info.address() == &expected_tombstone,
-            ProgramError::InvalidAccountData
         );
         require!(
             nonce_tombstone_info.owned_by(program_id),
