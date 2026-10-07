@@ -90,13 +90,16 @@ export function createSession(
         discriminator: ProofKind.Pubkey,
         proofData: proof.toBytes(),
       }),
-      getCreateConfidentialDvpInstruction({
-        ...input,
-        amountBCiphertextLo: Array.from(ciphertext.lo),
-        amountBCiphertextHi: Array.from(ciphertext.hi),
-        decryptableZeroBalance: Array.from(zero.toBytes()),
-        pubkeyValidityProofOffset: -1,
-      }),
+      getCreateConfidentialDvpInstruction(
+        {
+          ...input,
+          amountBCiphertextLo: Array.from(ciphertext.lo),
+          amountBCiphertextHi: Array.from(ciphertext.hi),
+          decryptableZeroBalance: Array.from(zero.toBytes()),
+          pubkeyValidityProofOffset: -1,
+        },
+        { programAddress: config.programAddress },
+      ),
     ]);
   } finally {
     proof.free();
@@ -124,11 +127,14 @@ export function applySession(
   const ae = source.keys.ae.encrypt(appliedBalance);
   try {
     return new SessionBuilder(config, input.signer).finish([
-      getApplyConfidentialDvpInstruction({
-        ...input,
-        expectedPendingBalanceCreditCounter: balance.pendingCreditCounter,
-        newDecryptableAvailableBalance: Array.from(ae.toBytes()),
-      }),
+      getApplyConfidentialDvpInstruction(
+        {
+          ...input,
+          expectedPendingBalanceCreditCounter: balance.pendingCreditCounter,
+          newDecryptableAvailableBalance: Array.from(ae.toBytes()),
+        },
+        { programAddress: config.programAddress },
+      ),
     ]);
   } finally {
     ae.free();
@@ -261,21 +267,24 @@ export async function settleSession(
   }
   return session.finish([
     appendExtras(
-      getSettleConfidentialDvpInstruction({
-        ...input,
-        paymentEqualityContext,
-        paymentValidityContext,
-        paymentRangeContext,
-        eqLoContext: binding[0]!,
-        eqHiContext: binding[1]!,
-        zeroContext,
-        surplusEqualityContext: refund?.contexts[0],
-        surplusValidityContext: refund?.contexts[1],
-        surplusRangeContext: refund?.contexts[2],
-        payment: payment.data,
-        surplusB: refund?.data ?? null,
-        legAExtrasCount: extras.legA?.length ?? 0,
-      }),
+      getSettleConfidentialDvpInstruction(
+        {
+          ...input,
+          paymentEqualityContext,
+          paymentValidityContext,
+          paymentRangeContext,
+          eqLoContext: binding[0]!,
+          eqHiContext: binding[1]!,
+          zeroContext,
+          surplusEqualityContext: refund?.contexts[0],
+          surplusValidityContext: refund?.contexts[1],
+          surplusRangeContext: refund?.contexts[2],
+          payment: payment.data,
+          surplusB: refund?.data ?? null,
+          legAExtrasCount: extras.legA?.length ?? 0,
+        },
+        { programAddress: config.programAddress },
+      ),
       extras,
     ),
   ]);
@@ -389,28 +398,40 @@ export async function refundSession(
   let ix: Instruction;
   switch (instruction.kind) {
     case "reclaim":
-      ix = getReclaimConfidentialDvpInstruction({
-        ...instruction.input,
-        ...proof,
-      });
+      ix = getReclaimConfidentialDvpInstruction(
+        {
+          ...instruction.input,
+          ...proof,
+        },
+        { programAddress: config.programAddress },
+      );
       break;
     case "cancel":
-      ix = getCancelConfidentialDvpInstruction({
-        ...instruction.input,
-        ...proof,
-      });
+      ix = getCancelConfidentialDvpInstruction(
+        {
+          ...instruction.input,
+          ...proof,
+        },
+        { programAddress: config.programAddress },
+      );
       break;
     case "reject":
-      ix = getRejectConfidentialDvpInstruction({
-        ...instruction.input,
-        ...proof,
-      });
+      ix = getRejectConfidentialDvpInstruction(
+        {
+          ...instruction.input,
+          ...proof,
+        },
+        { programAddress: config.programAddress },
+      );
       break;
     case "recover":
-      ix = getRecoverConfidentialDvpInstruction({
-        ...instruction.input,
-        ...proof,
-      });
+      ix = getRecoverConfidentialDvpInstruction(
+        {
+          ...instruction.input,
+          ...proof,
+        },
+        { programAddress: config.programAddress },
+      );
       break;
   }
   return session.finish([appendExtras(ix, extras)]);

@@ -64,7 +64,13 @@ export async function runSwap(
   const [swap, escrow] = snapshots;
   if (!swap || !escrow)
     throw new Error("RPC returned an incomplete funding snapshot");
-  const checked = await verifyConfidentialFunding(swap, escrow, keys, amountB);
+  const checked = await verifyConfidentialFunding(
+    swap,
+    escrow,
+    keys,
+    amountB,
+    config.programAddress,
+  );
   await wallet.fund({
     escrowA: accounts.create.dvpAtaA,
     escrowB: accounts.create.dvpAtaB,

@@ -79,14 +79,15 @@ const textEncoder = new TextEncoder();
  */
 export function decodeSwapDvpChecked<TAddress extends string = string>(
   encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>,
+  programAddress: Address = DVP_SWAP_PROGRAM_PROGRAM_ADDRESS,
 ): Account<SwapDvpAccount, TAddress> {
   if ("exists" in encodedAccount) assertAccountExists(encodedAccount);
   const account = encodedAccount as EncodedAccount<TAddress>;
 
-  if (account.programAddress !== DVP_SWAP_PROGRAM_PROGRAM_ADDRESS) {
+  if (account.programAddress !== programAddress) {
     throw new SwapDvpVerificationError(
       `Account ${account.address} is not owned by the DvP program ` +
-        `(${DVP_SWAP_PROGRAM_PROGRAM_ADDRESS}); it is owned by ` +
+        `(${programAddress}); it is owned by ` +
         `${account.programAddress}. Refusing to treat it as a SwapDvp.`,
     );
   }
@@ -138,10 +139,11 @@ export function decodeSwapDvpChecked<TAddress extends string = string>(
 export async function fetchSwapDvpChecked<TAddress extends string = string>(
   rpc: Parameters<typeof fetchEncodedAccount>[0],
   address: Address<TAddress>,
-  config?: FetchAccountConfig,
+  config?: FetchAccountConfig & { programAddress?: Address },
 ): Promise<Account<SwapDvpAccount, TAddress>> {
-  const encoded = await fetchEncodedAccount(rpc, address, config);
-  return decodeSwapDvpChecked(encoded);
+  const { programAddress, ...fetchConfig } = config ?? {};
+  const encoded = await fetchEncodedAccount(rpc, address, fetchConfig);
+  return decodeSwapDvpChecked(encoded, programAddress);
 }
 
 // The nonce is a PDA seed; a JavaScript number above 2^53 would round
@@ -201,20 +203,24 @@ export function findSwapDvpEscrowAta(args: {
 
 export function findNonceTombstonePda(
   swapDvp: Address,
+  programAddress: Address = DVP_SWAP_PROGRAM_PROGRAM_ADDRESS,
 ): Promise<readonly [Address, number]> {
   return getProgramDerivedAddress({
-    programAddress: DVP_SWAP_PROGRAM_PROGRAM_ADDRESS,
+    programAddress,
     seeds: [textEncoder.encode("nonce"), getAddressEncoder().encode(swapDvp)],
   });
 }
 
 /** Discover both layouts, skipping accounts that fail decoding or canonical PDA verification. */
-export async function fetchSwapDvpAccounts(rpc: Rpc<GetProgramAccountsApi>) {
+export async function fetchSwapDvpAccounts(
+  rpc: Rpc<GetProgramAccountsApi>,
+  programAddress: Address = DVP_SWAP_PROGRAM_PROGRAM_ADDRESS,
+) {
   const accounts = (
     await Promise.all(
       [SWAP_DVP_ACCOUNT_SIZE, CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE].map((size) =>
         rpc
-          .getProgramAccounts(DVP_SWAP_PROGRAM_PROGRAM_ADDRESS, {
+          .getProgramAccounts(programAddress, {
             encoding: "base64",
             withContext: false,
             filters: [{ dataSize: BigInt(size) }],
@@ -228,8 +234,12 @@ export async function fetchSwapDvpAccounts(rpc: Rpc<GetProgramAccountsApi>) {
       try {
         const checked = decodeSwapDvpChecked(
           parseBase64RpcAccount(raw.pubkey, raw.account),
+          programAddress,
         );
-        const [expected] = await findSwapDvpPda(checked.data);
+        const [expected] = await findSwapDvpPda({
+          ...checked.data,
+          programAddress,
+        });
         return expected === checked.address ? checked : undefined;
       } catch {
         // Program ownership and matching size do not prove DvP initialized the account.
@@ -249,7 +259,7 @@ export async function fetchSwapDvpAccounts(rpc: Rpc<GetProgramAccountsApi>) {
 export async function verifySwapDvp<TAddress extends string = string>(
   rpc: Parameters<typeof fetchEncodedAccount>[0],
   address: Address<TAddress>,
-  config?: FetchAccountConfig,
+  config?: FetchAccountConfig & { programAddress?: Address },
 ): Promise<Account<SwapDvpAccount, TAddress>> {
   const account = await fetchSwapDvpChecked(rpc, address, config);
   const { data } = account;
@@ -260,6 +270,7 @@ export async function verifySwapDvp<TAddress extends string = string>(
     mintA: data.mintA,
     mintB: data.mintB,
     nonce: data.nonce,
+    programAddress: config?.programAddress,
   });
   if (expected !== (address as Address)) {
     throw new SwapDvpVerificationError(

@@ -75,7 +75,12 @@ const EXPIRY_SECONDS = 3600n;
 export async function fixture(
   context: TestContext,
   format: 0 | 1,
-  options: { hook?: boolean; amountB?: bigint; auditor?: boolean } = {},
+  options: {
+    hook?: boolean;
+    amountB?: bigint;
+    auditor?: boolean;
+    programAddress?: Address;
+  } = {},
 ) {
   const payer = await generateKeyPairSigner();
   const userA = await generateKeyPairSigner();
@@ -89,6 +94,7 @@ export async function fixture(
   const setup: SessionConfig = {
     payer,
     format: 1,
+    programAddress: options.programAddress,
     minimumBalanceForRentExemption: (space) =>
       context.minimumBalanceForRentExemption(BigInt(space)),
   };
@@ -176,8 +182,14 @@ export async function fixture(
     mintB: mintB.address,
     nonce: 1n,
   };
-  const [swapDvp] = await findSwapDvpPda(seedTerms);
-  const [nonceTombstone] = await findNonceTombstonePda(swapDvp);
+  const [swapDvp] = await findSwapDvpPda({
+    ...seedTerms,
+    programAddress: options.programAddress,
+  });
+  const [nonceTombstone] = await findNonceTombstonePda(
+    swapDvp,
+    options.programAddress,
+  );
   const [dvpAtaA] = await findSwapDvpEscrowAta({
     swapDvp,
     mint: mintA.address,
@@ -257,7 +269,10 @@ export async function fixture(
     confidentialState(getTokenDecoder().decode(context.account(key)!.data));
   const source = () => ({ state: state(dvpAtaB), keys });
   const swap = () => {
-    const decoded = decodeSwapDvpChecked(context.account(swapDvp)!);
+    const decoded = decodeSwapDvpChecked(
+      context.account(swapDvp)!,
+      options.programAddress,
+    );
     assert(decoded.data.mode === "confidential");
     return decoded.data.confidential;
   };

@@ -48,6 +48,7 @@ export async function prepareSettlement(
     escrow,
     keys,
     expectedAmount,
+    config.programAddress,
   );
 
   // The client creates payment, optional surplus, amount-binding and zero proofs.

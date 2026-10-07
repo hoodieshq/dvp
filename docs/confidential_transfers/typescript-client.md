@@ -83,6 +83,13 @@ const config: SessionConfig = {
 };
 ```
 
+For another deployment, set `config.programAddress`. Pass the same address to
+`findSwapDvpPda` in its input, and as the optional final argument to
+`findNonceTombstonePda`, `decodeSwapDvpChecked`, `fetchSwapDvpAccounts` and
+`verifyConfidentialFunding`. `fetchSwapDvpChecked` and `verifySwapDvp` accept it
+in their config argument. Omitting it preserves the generated program address.
+The swap and settlement examples forward `config.programAddress` to verification.
+
 Defaults are 400k CU and 4 MB of loaded account data. Optional `computeUnitPrice`
 is a `bigint` in micro-lamports per CU. V0 encodes `SetComputeUnitPrice`; v1 encodes
 `ceil(computeUnitPrice * computeUnitLimit / 1_000_000)` as total priority-fee

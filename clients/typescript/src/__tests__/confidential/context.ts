@@ -37,11 +37,11 @@ export const HOOK_PROGRAM = address(
 
 /** Test-only runtime and account transport. Client helpers never import this module. */
 export class TestContext extends LiteSVM {
-  constructor() {
+  constructor(programAddress: Address = DVP_SWAP_PROGRAM_PROGRAM_ADDRESS) {
     super();
     const deploy = process.env.SBF_OUT_PATH ?? "target/deploy";
     this.addProgramFromFile(
-      DVP_SWAP_PROGRAM_PROGRAM_ADDRESS,
+      programAddress,
       resolve(deploy, "dvp_swap_program.so"),
     );
     this.addProgramFromFile(

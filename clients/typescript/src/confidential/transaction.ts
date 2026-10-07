@@ -55,6 +55,7 @@ export const ProofKind = {
 export type SessionConfig = Readonly<{
   payer: TransactionSigner;
   format: 0 | 1;
+  programAddress?: Address;
   lookupTables?: AddressesByLookupTableAddress;
   minimumBalanceForRentExemption: (space: number) => bigint | Promise<bigint>;
   computeUnitLimit?: number;

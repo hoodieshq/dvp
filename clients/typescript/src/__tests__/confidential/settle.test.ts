@@ -11,8 +11,12 @@ import { createAndFund, fixture, fundAsset, fundEscrow } from "./utils";
 
 for (const format of [1, 0] as const) {
   test(`integrator example: Create, fund, Apply and exact Settle (v${format})`, async () => {
-    const context = new TestContext();
-    const f = await fixture(context, format);
+    // Exercise the example against the alternate deployment used for devnet.
+    const programAddress = address(
+      "bVntZ9Us9Wv8v2hMytmzLs4omXcZf3UwJ5xXbB3TnA6",
+    );
+    const context = new TestContext(programAddress);
+    const f = await fixture(context, format, { programAddress });
     try {
       await runSwap(
         context.rpc,

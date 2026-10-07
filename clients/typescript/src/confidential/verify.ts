@@ -1,4 +1,4 @@
-import type { EncodedAccount } from "@solana/kit";
+import type { Address, EncodedAccount } from "@solana/kit";
 import {
   decodeSwapDvpChecked,
   findSwapDvpPda,
@@ -13,11 +13,12 @@ export async function verifyConfidentialFunding(
   rawEscrow: EncodedAccount,
   keys: EscrowKeys,
   expectedAmount: bigint,
+  programAddress?: Address,
 ) {
-  const account = decodeSwapDvpChecked(rawSwap);
+  const account = decodeSwapDvpChecked(rawSwap, programAddress);
   if (account.data.mode !== "confidential")
     throw new SwapDvpVerificationError("Expected a confidential swap");
-  const [expected] = await findSwapDvpPda(account.data);
+  const [expected] = await findSwapDvpPda({ ...account.data, programAddress });
   if (account.address !== expected)
     throw new SwapDvpVerificationError("Wrong swap PDA");
   const escrow = await readEscrowAccount(
