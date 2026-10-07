@@ -52,10 +52,10 @@ pub fn verify_confidential_swap(
     if swap.base.token_program_b != spl_token_2022_interface::ID {
         return Err(ConfidentialError::Account("leg B token program"));
     }
+    check_escrow_keys(escrow, keys)?;
     if keys.encrypt_amount(expected_amount_b)? != swap.amount_b {
         return Err(ConfidentialError::AmountMismatch);
     }
-    check_escrow_keys(escrow, keys)?;
     if !bool::from(escrow.approved) {
         return Err(ConfidentialError::Account("escrow requires mint approval"));
     }
@@ -71,7 +71,7 @@ pub fn check_escrow_keys(
     keys: &EscrowKeys,
 ) -> Result<(), ConfidentialError> {
     if state.elgamal_pubkey != (*keys.elgamal.pubkey()).into() {
-        return Err(ConfidentialError::Account("escrow ElGamal key"));
+        return Err(ConfidentialError::EscrowKeyMismatch);
     }
     Ok(())
 }

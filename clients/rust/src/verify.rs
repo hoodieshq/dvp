@@ -27,12 +27,12 @@ pub const SWAP_DVP_ACCOUNT_LEN: usize = 1  // bump
 
 /// Public base followed by the two amount B ciphertexts.
 pub const CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN: usize =
-    SWAP_DVP_ACCOUNT_LEN + 2 * crate::confidential::ELGAMAL_CIPHERTEXT_LEN;
+    SWAP_DVP_ACCOUNT_LEN + 2 * crate::ciphertext::ELGAMAL_CIPHERTEXT_LEN;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConfidentialSwapDvp {
     pub base: SwapDvp,
-    pub amount_b: crate::confidential::AmountCiphertexts,
+    pub amount_b: crate::ciphertext::AmountCiphertexts,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -165,7 +165,7 @@ pub fn find_swap_dvp_escrow_ata(
 }
 
 /// Verifies raw account fields (owner, size, layout, canonical PDA) and
-/// returns the decoded mode and terms. Core used by [`decode_swap_dvp_account`];
+/// returns the decoded mode and terms. Core used by `decode_swap_dvp_account`;
 /// available without the `fetch` feature.
 pub fn verify_swap_dvp_bytes(
     expected_address: &Pubkey,
@@ -189,10 +189,10 @@ pub fn verify_swap_dvp_bytes(
                 ));
             }
             let tail = &data[SWAP_DVP_ACCOUNT_LEN..];
-            let (lo, hi) = tail.split_at(crate::confidential::ELGAMAL_CIPHERTEXT_LEN);
+            let (lo, hi) = tail.split_at(crate::ciphertext::ELGAMAL_CIPHERTEXT_LEN);
             SwapDvpAccount::Confidential(ConfidentialSwapDvp {
                 base,
-                amount_b: crate::confidential::AmountCiphertexts {
+                amount_b: crate::ciphertext::AmountCiphertexts {
                     lo: lo.try_into().unwrap(),
                     hi: hi.try_into().unwrap(),
                 },
@@ -231,8 +231,8 @@ pub fn decode_swap_dvp_account(
 }
 
 /// Complete funding gate over fetched swap and escrow snapshots. Returns the
-/// checked confidential terms and CT state for the funding session builder.
-#[cfg(feature = "fetch")]
+/// checked confidential terms and CT state for the caller's SPL wallet funding.
+#[cfg(all(feature = "fetch", feature = "confidential"))]
 pub fn verify_confidential_funding(
     swap_address: &Pubkey,
     swap_account: &solana_account::Account,
@@ -264,7 +264,8 @@ pub fn verify_confidential_funding(
 }
 
 /// Query both exact account sizes. Every result is checked against its owner and
-/// canonical PDA before being returned. Fetch escrow snapshots separately for
+/// canonical PDA before being returned; unrelated or malformed accounts are skipped.
+/// RPC failures still propagate. Fetch escrow snapshots separately for
 /// verify_confidential_swap before funding.
 #[cfg(feature = "fetch")]
 pub fn fetch_swap_dvp_accounts(
@@ -284,12 +285,13 @@ pub fn fetch_swap_dvp_accounts(
         for (address, ui_account) in
             rpc.get_program_ui_accounts_with_config(&DVP_SWAP_PROGRAM_ID, config)?
         {
-            let owner: Pubkey = ui_account.owner.parse()?;
-            let data = ui_account
-                .data
-                .decode()
-                .ok_or_else(|| SwapDvpVerifyError::Malformed("RPC account encoding".into()))?;
-            result.push((address, verify_swap_dvp_bytes(&address, &owner, &data)?));
+            let (Ok(owner), Some(data)) = (ui_account.owner.parse(), ui_account.data.decode())
+            else {
+                continue;
+            };
+            if let Ok(swap) = verify_swap_dvp_bytes(&address, &owner, &data) {
+                result.push((address, swap));
+            }
         }
     }
     Ok(result)
@@ -456,8 +458,11 @@ mod tests {
     fn verify_confidential_layout_and_sentinel() {
         let mut base = sample();
         base.amount_b = u64::MAX;
-        let keys = crate::confidential::EscrowKeys::from_seed(&[7; 32]).unwrap();
-        let amount = keys.encrypt_amount(65_536).unwrap();
+        // Layout verification treats ciphertexts as opaque wire bytes.
+        let amount = crate::ciphertext::AmountCiphertexts {
+            lo: [7; 64],
+            hi: [8; 64],
+        };
         let address = find_swap_dvp_address(
             &base.settlement_authority,
             &base.user_a,

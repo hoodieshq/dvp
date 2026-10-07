@@ -5,6 +5,7 @@ use crate::{
     state_utils::{AMOUNT_A, AMOUNT_B},
     utils::{execute, get_token_balance, ClientFixture, TestContext},
 };
+use dvp_swap_program_client::confidential::test_utils::{AMOUNT_LO_BITS, RECORD_PROGRAM_ID};
 use dvp_swap_program_client::confidential::*;
 
 #[test]
@@ -39,28 +40,25 @@ fn client_settle_exact_and_surplus_in_both_formats() {
                 );
             }
             let mint_account = context.get_account(&f.dvp.accounts.mint_b).unwrap();
-            let auditor = mint_auditor(&mint_account.owner, &mint_account.data).unwrap();
-            let source = f.source(&context);
-            let swap = f.swap(&context);
-            let recipient = state(&context, &f.recipient);
-            let refund = state(&context, &f.refund);
+            let raw_swap = context.get_account(&f.dvp.accounts.swap_dvp).unwrap();
+            let raw_escrow = context.get_account(&f.dvp.accounts.dvp_ata_b).unwrap();
+            let raw_recipient = context.get_account(&f.recipient).unwrap();
+            let raw_refund = context.get_account(&f.refund).unwrap();
 
-            // Build proofs and check that v0 uses Record storage and address lookups.
-            let session = settle_session(
+            // Run the integrator recipe, including snapshot checks and auditor extraction.
+            let session = crate::confidential_examples::settle::settle(
                 &f.config,
                 f.settle_accounts(),
-                SettleRequest {
-                    source: TransferSource {
-                        state: &source,
-                        keys: &f.keys,
-                        history: &[],
-                    },
-                    swap: &swap,
-                    expected_amount_b: amount_b,
-                    recipient: &recipient,
-                    surplus_recipient: &refund,
-                    auditor: auditor.as_ref(),
+                crate::confidential_examples::settle::Snapshot {
+                    swap: &raw_swap,
+                    escrow: &raw_escrow,
+                    recipient: &raw_recipient,
+                    surplus_recipient: &raw_refund,
+                    mint: &mint_account,
                 },
+                &f.keys,
+                amount_b,
+                &[],
                 &[],
                 &[],
             )
@@ -163,7 +161,7 @@ fn settle_rejects_wrong_amount_or_keys() {
     let wrong_keys = EscrowKeys::from_seed(&[23; 32]).unwrap();
     assert!(matches!(
         build(&wrong_keys, AMOUNT_B),
-        Err(ConfidentialError::Account("escrow ElGamal key"))
+        Err(ConfidentialError::EscrowKeyMismatch)
     ));
 }
 

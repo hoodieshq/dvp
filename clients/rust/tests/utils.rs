@@ -1,3 +1,4 @@
+use dvp_swap_program_client::confidential::test_utils::RECORD_PROGRAM_ID;
 #[path = "../../../tests/integration-tests/src/utils.rs"]
 mod framework;
 pub use framework::*;
@@ -74,6 +75,8 @@ impl ClientFixture {
         f.amount_b_openings = [keys.opening_lo.clone(), keys.opening_hi.clone()];
         let mut config =
             SessionConfig::new(context.payer.pubkey(), format, context.svm.get_sysvar());
+        // Exercise fee-aware proof packing and execution in both transaction formats.
+        config.compute_unit_price = Some(1);
         // The table is active before construction. Proof addresses are generated
         // later and stay static; all stable DvP accounts are available through LUT.
         if format == TransactionFormat::V0 {

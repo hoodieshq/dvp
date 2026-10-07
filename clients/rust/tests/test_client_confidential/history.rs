@@ -2,6 +2,10 @@ use crate::{
     confidential_utils::{create_wallet_account, send_v1, state, Keys},
     utils::{execute, trace, ClientFixture, TestContext, TOKEN_2022_PROGRAM_ID as TOKEN},
 };
+use dvp_swap_program_client::confidential::test_utils::{
+    checked_available_balance, transfer_session, TransferAccounts, TransferRequest, AMOUNT_LO_BITS,
+    RECORD_PROGRAM_ID,
+};
 use dvp_swap_program_client::confidential::*;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;

@@ -4,12 +4,16 @@ The Rust client supports v1 and v0 with caller-provided lookup tables. Hooked
 Settle uses v1. Sending, retries, lookup-table provisioning and seed delivery
 belong to the caller. Keep the shared seed and signing keys separate.
 
-The handwritten API is exported from `dvp_swap_program_client::confidential`;
+Enable the opt-in `confidential` feature for the handwritten API in
+`dvp_swap_program_client::confidential`;
 account verification is in `verify`. Builders consume the generated account and
 argument types from `instructions` and `types`, and use them to encode the final
 instructions. Keys, proofs and session builders work without the optional `fetch`
 feature. That feature adds fetched-account wrappers, RPC account discovery and
-RPC transaction decoding.
+RPC transaction decoding. Default features are empty: generated builders, CPI
+builders and raw verification do not require the ZK SDK. `ciphertext` contains
+the always-available wire types. `test-utils` is internal integration-test support,
+not part of the normal client API.
 
 ## Keys and funding checks
 
@@ -17,7 +21,9 @@ RPC transaction decoding.
 caller's HMAC-SHA256 callback. `EscrowKeys::from_seed` derives ElGamal, AE and
 the two deterministic openings; `encrypt_amount` accepts `1..=2^48-1`.
 The shared fixtures are in `clients/test-vectors/confidential-amount-b.json`.
-Reproduce them with `cargo run -p dvp-swap-program-client --example confidential_vectors`.
+Regenerate them explicitly with
+`cargo test -p dvp-swap-program-client --features confidential --lib regenerate_shared_vectors -- --ignored`.
+Normal tests only read these fixtures.
 
 Before funding, use `verify::verify_swap_dvp_bytes` (or the `fetch` feature's
 `decode_swap_dvp_account`) to check owner, exact layout, canonical swap PDA and
@@ -28,8 +34,10 @@ confidential base's `amount_b` is a sentinel. These decoders now return
 `Public` or use `base()` when they need only common fields. Use `read_escrow_account` to check
 the Token-2022 owner, canonical ATA, token authority and mint. Then call
 `verify_confidential_swap` with the agreed amount and derived keys. It checks the
-stored ciphertexts, escrow key, approval, confidential credits and AE/ElGamal
-balance agreement. `fetch_swap_dvp_accounts` queries and checks both account sizes.
+escrow key first (`EscrowKeyMismatch`), then the amount ciphertexts
+(`AmountMismatch`), approval, confidential credits and AE/ElGamal
+balance agreement. `fetch_swap_dvp_accounts` queries both account sizes, skips
+invalid accounts and still propagates RPC errors.
 With `fetch`, `verify::verify_confidential_funding` combines these checks over the
 two fetched accounts and returns the checked terms and CT state.
 
@@ -37,7 +45,10 @@ two fetched accounts and returns the checked terms and CT state.
 
 Construct `SessionConfig` with the fee payer, format, current cluster rent and
 active lookup tables for v0. The default limits are 400k CU and 4 MB of loaded
-account data. Each signed transaction is checked against 4096 bytes for v1 or
+account data. Set `compute_unit_price: Some(price)` in micro-lamports per CU to
+include priority fees in every size check and proof-packing decision. V0 uses
+`SetComputeUnitPrice`; v1 stores `ceil(price * compute_unit_limit / 1_000_000)`
+lamports. `None` omits the fee. Each signed transaction is checked against 4096 bytes for v1 or
 1232 bytes for v0, including signatures and compute-budget instructions. SDK
 message validation also rejects structural limits before signing; v1 permits at
 most 64 unique addresses, including base and extra accounts. V1 ignores lookup
@@ -47,10 +58,12 @@ incoming credits when payment and surplus use the same destination account.
 | Builder | Inputs and result |
 | --- | --- |
 | `create_session` | Generated Create accounts/terms, keys and agreed amount; inserts ciphertexts, decryptable zero and the inline pubkey proof. |
-| `transfer_session` | Wallet source, verified escrow recipient, amount and mint auditor; prepares funding proofs, transfers and closes contexts. |
 | `apply_session` | Generated Apply accounts/seed terms and `TransferSource`; computes the actual pending counter and correct new AE balance. |
 | `settle_session` | Checked confidential swap, agreed amount, escrow and both recipients; prepares payment, amount-binding, optional surplus and zero proofs. |
 | `refund_session` | `RefundInstruction` wrapping generated Reclaim/Cancel/Reject/Recover accounts and optional `RefundRequest`; prepares `Partial`/`Full` proofs or `None` without proofs. |
+
+Funding is an ordinary SPL Token-2022 wallet transfer to the verified escrow.
+Use the SPL SDK for it; the DvP client does not expose a generic transfer builder.
 
 `TransferSource` contains the CT snapshot, its keys and recovered history events.
 Read the mint's optional auditor with `mint_auditor`. For confidential transfers,
@@ -152,6 +165,26 @@ Preflight errors distinguish insufficient available balance, oversized transfer
 or surplus, zero Partial refunds, missing recipient approval, disabled credits
 and insufficient pending-counter capacity. Snapshots can still change after
 construction, so these checks do not replace final on-chain validation.
+
+## Integrator examples
+
+`clients/rust/examples/confidential` contains copyable recipes using only public APIs:
+
+- `create_apply.rs`: derive the shared seed through a KMS callback, Create, verify
+  fetched accounts before SPL wallet funding, then Apply from a fresh snapshot.
+- `settle.rs`: verify fetched swap/escrow/recipient snapshots, read the mint auditor,
+  and build an exact or surplus Settle. Integration tests execute this recipe in
+  both formats, including a mint auditor and nonzero high limbs.
+- `refunds.rs`: prepare Reclaim, Cancel, Reject or Recover from current snapshots.
+- `send.rs`: sign with a fresh blockhash, confirm preparations in order, send the
+  final transaction using base64, and clean up surviving accounts after abandonment.
+
+These are compiled library examples, not a CLI that creates wallets or sends to
+an implicit cluster. Supply generated instruction accounts and agreed terms,
+fetch related accounts together at the same commitment, and pass an explicitly
+configured RPC client to the send functions. Review public terms before funding.
+Build without test helpers:
+`cargo build -p dvp-swap-program-client --features confidential,fetch --example confidential`.
 
 ## Tests
 

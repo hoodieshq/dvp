@@ -35,71 +35,6 @@ pub struct TransferSource<'a> {
     pub history: &'a [BalanceEvent],
 }
 
-pub struct TransferAccounts {
-    pub authority: Pubkey,
-    pub source: Pubkey,
-    pub mint: Pubkey,
-    pub destination: Pubkey,
-}
-
-pub struct TransferRequest<'a> {
-    pub source: TransferSource<'a>,
-    pub recipient: &'a ConfidentialTransferAccount,
-    pub amount: u64,
-    pub auditor: Option<&'a ElGamalPubkey>,
-}
-
-/// A regular Token-2022 transfer for funding the verified escrow. The wallet
-/// signs the final transfer and context cleanup; this does not invoke DvP.
-pub fn transfer_session(
-    config: &SessionConfig,
-    accounts: TransferAccounts,
-    request: TransferRequest<'_>,
-    hook_extras: &[AccountMeta],
-) -> Result<TransactionSession, ConfidentialError> {
-    use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
-    let source = request.source;
-    let balance = read_available_balance(source.state, source.keys, source.history)?;
-    let available = source
-        .state
-        .available_balance
-        .try_into()
-        .map_err(|_| ConfidentialError::Account("available ciphertext"))?;
-    let mut session = SessionBuilder::new(config, accounts.authority);
-    let transfer = prepare_transfer(
-        &mut session,
-        source.keys,
-        &available,
-        balance,
-        request.amount,
-        request.recipient,
-        request.auditor,
-    )?;
-    let [equality, validity, range] = transfer.contexts;
-    let mut instructions =
-        spl_token_2022_interface::extension::confidential_transfer::instruction::transfer(
-            &spl_token_2022_interface::ID,
-            &accounts.source,
-            &accounts.mint,
-            &accounts.destination,
-            &transfer
-                .data
-                .new_source_decryptable_available_balance
-                .into(),
-            &transfer.data.auditor_ciphertext_lo.into(),
-            &transfer.data.auditor_ciphertext_hi.into(),
-            &accounts.authority,
-            &[],
-            ProofLocation::ContextStateAccount(&equality),
-            ProofLocation::ContextStateAccount(&validity),
-            ProofLocation::ContextStateAccount(&range),
-        )
-        .map_err(proof_error)?;
-    instructions[0].accounts.extend(extras(&[], hook_extras)?);
-    instructions.extend(session.close_proof_contexts());
-    session.finish(instructions)
-}
-
 pub fn create_session(
     config: &SessionConfig,
     accounts: &CreateConfidentialDvp,
@@ -282,6 +217,8 @@ pub struct RefundRequest<'a> {
     pub auditor: Option<&'a ElGamalPubkey>,
 }
 
+// Keep generated account sets directly usable without requiring callers to box them.
+#[allow(clippy::large_enum_variant)]
 pub enum RefundInstruction {
     Reclaim(ReclaimConfidentialDvp),
     Cancel(CancelConfidentialDvp),
@@ -617,4 +554,73 @@ where
     .await
     .map_err(|e| ConfidentialError::Transaction(e.to_string()))?;
     extras(&[], &ix.accounts[4..])
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) mod test_support {
+    use super::*;
+    pub struct TransferAccounts {
+        pub authority: Pubkey,
+        pub source: Pubkey,
+        pub mint: Pubkey,
+        pub destination: Pubkey,
+    }
+
+    pub struct TransferRequest<'a> {
+        pub source: TransferSource<'a>,
+        pub recipient: &'a ConfidentialTransferAccount,
+        pub amount: u64,
+        pub auditor: Option<&'a ElGamalPubkey>,
+    }
+
+    /// A regular Token-2022 transfer for funding the verified escrow. The wallet
+    /// signs the final transfer and context cleanup; this does not invoke DvP.
+    pub fn transfer_session(
+        config: &SessionConfig,
+        accounts: TransferAccounts,
+        request: TransferRequest<'_>,
+        hook_extras: &[AccountMeta],
+    ) -> Result<TransactionSession, ConfidentialError> {
+        use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+        let source = request.source;
+        let balance = read_available_balance(source.state, source.keys, source.history)?;
+        let available = source
+            .state
+            .available_balance
+            .try_into()
+            .map_err(|_| ConfidentialError::Account("available ciphertext"))?;
+        let mut session = SessionBuilder::new(config, accounts.authority);
+        let transfer = prepare_transfer(
+            &mut session,
+            source.keys,
+            &available,
+            balance,
+            request.amount,
+            request.recipient,
+            request.auditor,
+        )?;
+        let [equality, validity, range] = transfer.contexts;
+        let mut instructions =
+            spl_token_2022_interface::extension::confidential_transfer::instruction::transfer(
+                &spl_token_2022_interface::ID,
+                &accounts.source,
+                &accounts.mint,
+                &accounts.destination,
+                &transfer
+                    .data
+                    .new_source_decryptable_available_balance
+                    .into(),
+                &transfer.data.auditor_ciphertext_lo.into(),
+                &transfer.data.auditor_ciphertext_hi.into(),
+                &accounts.authority,
+                &[],
+                ProofLocation::ContextStateAccount(&equality),
+                ProofLocation::ContextStateAccount(&validity),
+                ProofLocation::ContextStateAccount(&range),
+            )
+            .map_err(proof_error)?;
+        instructions[0].accounts.extend(extras(&[], hook_extras)?);
+        instructions.extend(session.close_proof_contexts());
+        session.finish(instructions)
+    }
 }

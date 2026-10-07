@@ -33,6 +33,8 @@ pub struct SessionConfig {
     pub lookup_tables: Vec<AddressLookupTableAccount>,
     pub rent: Rent,
     pub compute_unit_limit: u32,
+    /// Micro-lamports per CU. V1 converts this to a total fee, rounded up.
+    pub compute_unit_price: Option<u64>,
     pub loaded_accounts_data_size_limit: u32,
 }
 
@@ -44,6 +46,7 @@ impl SessionConfig {
             lookup_tables: vec![],
             rent,
             compute_unit_limit: 400_000,
+            compute_unit_price: None,
             loaded_accounts_data_size_limit: 4_000_000,
         }
     }
@@ -62,17 +65,28 @@ impl SessionConfig {
     ) -> Result<VersionedMessage, ConfidentialError> {
         let error = |e: solana_message::CompileError| ConfidentialError::Transaction(e.to_string());
         let message = match self.format {
-            TransactionFormat::V1 => VersionedMessage::V1(
-                v1::Message::try_compile_with_config(
-                    &self.payer,
-                    instructions,
-                    blockhash,
-                    v1::TransactionConfig::empty()
-                        .with_compute_unit_limit(self.compute_unit_limit)
-                        .with_loaded_accounts_data_size_limit(self.loaded_accounts_data_size_limit),
+            TransactionFormat::V1 => {
+                let mut config = v1::TransactionConfig::empty()
+                    .with_compute_unit_limit(self.compute_unit_limit)
+                    .with_loaded_accounts_data_size_limit(self.loaded_accounts_data_size_limit);
+                if let Some(price) = self.compute_unit_price {
+                    const MICRO_LAMPORTS_PER_LAMPORT: u128 = 1_000_000;
+                    let fee = (u128::from(price) * u128::from(self.compute_unit_limit))
+                        .div_ceil(MICRO_LAMPORTS_PER_LAMPORT);
+                    config = config.with_priority_fee(
+                        fee.try_into().map_err(|_| ConfidentialError::Arithmetic)?,
+                    );
+                }
+                VersionedMessage::V1(
+                    v1::Message::try_compile_with_config(
+                        &self.payer,
+                        instructions,
+                        blockhash,
+                        config,
+                    )
+                    .map_err(error)?,
                 )
-                .map_err(error)?,
-            ),
+            }
             TransactionFormat::V0 => {
                 let mut with_budget = vec![
                     ComputeBudgetInstruction::set_compute_unit_limit(self.compute_unit_limit),
@@ -80,6 +94,9 @@ impl SessionConfig {
                         self.loaded_accounts_data_size_limit,
                     ),
                 ];
+                if let Some(price) = self.compute_unit_price {
+                    with_budget.push(ComputeBudgetInstruction::set_compute_unit_price(price));
+                }
                 with_budget.extend_from_slice(instructions);
                 VersionedMessage::V0(
                     v0::Message::try_compile(
@@ -340,6 +357,7 @@ impl<'a> SessionBuilder<'a> {
         })
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn close_proof_contexts(&self) -> Vec<Instruction> {
         self.cleanup
             .iter()

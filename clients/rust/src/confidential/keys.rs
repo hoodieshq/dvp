@@ -1,4 +1,4 @@
-use super::{ConfidentialError, AMOUNT_LO_BITS, ELGAMAL_CIPHERTEXT_LEN, MAX_TRANSFER_AMOUNT};
+use super::{AmountCiphertexts, ConfidentialError, AMOUNT_LO_BITS, MAX_TRANSFER_AMOUNT};
 use curve25519_dalek::scalar::Scalar;
 use hkdf::Hkdf;
 use sha2::Sha512;
@@ -67,10 +67,4 @@ impl EscrowKeys {
                 .to_bytes(),
         })
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AmountCiphertexts {
-    pub lo: [u8; ELGAMAL_CIPHERTEXT_LEN],
-    pub hi: [u8; ELGAMAL_CIPHERTEXT_LEN],
 }

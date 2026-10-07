@@ -3,6 +3,10 @@ use crate::{
     state_utils::AMOUNT_B,
     utils::{execute, ClientFixture, TestContext, TOKEN_2022_PROGRAM_ID as TOKEN},
 };
+use dvp_swap_program_client::confidential::test_utils::{
+    checked_available_balance, ciphertext_matches, transfer_session, TransferAccounts,
+    TransferRequest, AMOUNT_LO_BITS,
+};
 use dvp_swap_program_client::confidential::*;
 use solana_signer::Signer;
 use solana_zk_sdk::encryption::elgamal::ElGamalCiphertext;

@@ -1,18 +1,34 @@
 //! Confidential DvP keys, verified balances and unsigned transaction sessions.
 //! Sending, retries and shared-seed delivery belong to the caller.
 
-#![deny(warnings)]
-
 mod balance;
 mod history;
 mod keys;
 mod lifecycle;
 mod transaction;
-pub use balance::*;
-pub use history::*;
-pub use keys::*;
-pub use lifecycle::*;
-pub use transaction::*;
+pub use crate::ciphertext::AmountCiphertexts;
+pub use balance::{
+    read_available_balance, read_escrow_account, read_escrow_balance, recover_escrow_balance,
+    verify_confidential_swap, BalanceEvent, EscrowBalance,
+};
+pub use history::{BalanceHistory, ExecutedTransaction};
+pub use keys::{derive_shared_seed, EscrowKeys};
+pub use lifecycle::{
+    apply_session, create_session, mint_auditor, refund_session,
+    resolve_confidential_hook_accounts, settle_session, RefundAmount, RefundInstruction,
+    RefundRequest, SettleRequest, TransferSource,
+};
+pub use transaction::{PlannedTransaction, SessionConfig, TransactionFormat, TransactionSession};
+
+use balance::check_escrow_keys;
+#[cfg(test)]
+use balance::{checked_available_balance, ciphertext_matches};
+use transaction::RECORD_PROGRAM_ID;
+
+/// Helpers for this crate's integration tests, outside the integrator API.
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub mod test_utils;
 
 #[cfg(test)]
 mod tests;
@@ -37,7 +53,9 @@ pub enum ConfidentialError {
     RecipientPendingCounterFull { required: u64 },
     #[error("invalid confidential account: {0}")]
     Account(&'static str),
-    #[error("shared seed or expected amount does not match the swap")]
+    #[error("derived ElGamal key does not match the escrow")]
+    EscrowKeyMismatch,
+    #[error("expected amount does not match the swap ciphertexts")]
     AmountMismatch,
     #[error("the decryptable balance is invalid or does not match the ElGamal balance")]
     BalanceMismatch,
@@ -57,7 +75,5 @@ pub enum ConfidentialError {
     Swap(#[from] crate::verify::SwapDvpVerifyError),
 }
 
-pub const AMOUNT_LO_BITS: usize = 16;
+const AMOUNT_LO_BITS: usize = 16;
 pub const MAX_TRANSFER_AMOUNT: u64 = (1 << 48) - 1;
-pub const ELGAMAL_CIPHERTEXT_LEN: usize =
-    core::mem::size_of::<solana_zk_sdk_pod::encryption::elgamal::PodElGamalCiphertext>();

@@ -1,7 +1,13 @@
+use super::test_utils::{transfer_session, TransferAccounts, TransferRequest};
 use super::*;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_hash::Hash;
+use solana_instruction::Instruction;
+use solana_message::VersionedMessage;
 use solana_pubkey::Pubkey;
+use solana_rent::Rent;
 use solana_zk_sdk::encryption::elgamal::ElGamalCiphertext;
 use spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferAccount;
 
@@ -73,6 +79,37 @@ fn shared_key_and_amount_vectors() {
             .unwrap(),
         keys.encrypt_amount(1).unwrap()
     );
+}
+
+// Reproduce the shared Rust/TypeScript fixtures using public test keys.
+#[test]
+#[ignore = "rewrites the shared Rust/TypeScript test vectors"]
+fn regenerate_shared_vectors() {
+    let master = [0x42; 32];
+    let [authority, user_a, user_b, mint_a, mint_b] =
+        [1, 2, 3, 4, 5].map(|b| Pubkey::new_from_array([b; 32]));
+    let swap =
+        crate::verify::find_swap_dvp_address(&authority, &user_a, &user_b, &mint_a, &mint_b, 42).0;
+    let seed = derive_shared_seed(&swap, |message| -> Result<[u8; 32], ()> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&master).unwrap();
+        mac.update(message);
+        Ok(mac.finalize().into_bytes().into())
+    })
+    .unwrap();
+    let keys = EscrowKeys::from_seed(&seed).unwrap();
+    let secret: [u8; 32] = keys.elgamal.secret().into();
+    let ae: [u8; 16] = (&keys.ae).into();
+    let amounts: Vec<_> = [1, 65_535, 65_536, MAX_TRANSFER_AMOUNT].into_iter().map(|amount| {
+        let encrypted = keys.encrypt_amount(amount).unwrap();
+        serde_json::json!({ "amount": amount.to_string(), "ciphertext_lo": hex(&encrypted.lo), "ciphertext_hi": hex(&encrypted.hi) })
+    }).collect();
+    std::fs::write(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-vectors/confidential-amount-b.json"), serde_json::to_string_pretty(&serde_json::json!({
+        "master_key": hex(&master), "swap_pda": swap.to_string(), "shared_seed": hex(&seed),
+        "elgamal_public_key": hex(&keys.elgamal.pubkey().to_bytes()),
+        "elgamal_secret_key": hex(&secret), "ae_key": hex(&ae),
+        "opening_lo": hex(&keys.opening_lo.to_bytes()), "opening_hi": hex(&keys.opening_hi.to_bytes()),
+        "amounts": amounts
+    })).unwrap() + "\n").unwrap();
 }
 
 #[test]
@@ -549,4 +586,82 @@ fn rpc_history_rejects_incomplete_or_malformed_metadata() {
     let mut failed = base;
     failed["meta"]["err"] = serde_json::json!("AccountNotFound");
     assert!(!decode(failed).unwrap().succeeded);
+}
+
+fn plan(payload: usize) -> PlannedTransaction {
+    PlannedTransaction {
+        instructions: vec![Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![],
+            data: vec![0; payload],
+        }],
+        signers: vec![],
+    }
+}
+
+#[test]
+fn priority_fee_uses_micro_lamports_in_v0_and_total_lamports_in_v1() {
+    for format in [TransactionFormat::V0, TransactionFormat::V1] {
+        let mut config = SessionConfig::new(Pubkey::new_unique(), format, Rent::default());
+        // 400k CU at 1 micro-lamport rounds up to one lamport, not zero.
+        for (price, total) in [
+            (None, None),
+            (Some(0), Some(0)),
+            (Some(1), Some(1)),
+            (Some(250_001), Some(100_001)),
+        ] {
+            config.compute_unit_price = price;
+            let message = plan(0).message(&config, Hash::default()).unwrap();
+            match message {
+                VersionedMessage::V1(message) => assert_eq!(message.config.priority_fee, total),
+                VersionedMessage::V0(message) => {
+                    assert_eq!(
+                        message.instructions.len(),
+                        if price.is_some() { 4 } else { 3 }
+                    );
+                    if let Some(price) = price {
+                        let ix = &message.instructions[2];
+                        let expected = ComputeBudgetInstruction::set_compute_unit_price(price);
+                        assert_eq!(
+                            message.account_keys[ix.program_id_index as usize],
+                            expected.program_id
+                        );
+                        assert_eq!(ix.data, expected.data);
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+#[test]
+fn v1_priority_fee_rejects_total_lamport_overflow() {
+    let mut config =
+        SessionConfig::new(Pubkey::new_unique(), TransactionFormat::V1, Rent::default());
+    config.compute_unit_limit = 1_400_000;
+    config.compute_unit_price = Some(u64::MAX);
+    assert!(matches!(
+        plan(0).message(&config, Hash::default()),
+        Err(ConfidentialError::Arithmetic)
+    ));
+}
+
+#[test]
+fn priority_fee_counts_toward_the_transaction_size_limit() {
+    for format in [TransactionFormat::V0, TransactionFormat::V1] {
+        let mut config = SessionConfig::new(Pubkey::new_unique(), format, Rent::default());
+        // Find the largest payload accepted without a fee, including length-prefix changes.
+        let mut plan = plan(0);
+        while plan.wire_size(&config).is_ok() {
+            plan.instructions[0].data.push(0);
+        }
+        plan.instructions[0].data.pop();
+        assert_eq!(plan.wire_size(&config).unwrap(), config.transaction_limit());
+        config.compute_unit_price = Some(1);
+        assert!(matches!(
+            plan.wire_size(&config),
+            Err(ConfidentialError::TransactionTooLarge { .. })
+        ));
+    }
 }

@@ -2,6 +2,10 @@ use crate::{
     confidential_utils::{state, ConfidentialDvpFixture, MAX_PENDING},
     utils::{cleanup, send_plan, ClientFixture, TestContext},
 };
+use dvp_swap_program_client::confidential::test_utils::{
+    checked_available_balance, transfer_session, TransferAccounts, TransferRequest, AMOUNT_LO_BITS,
+    RECORD_PROGRAM_ID,
+};
 use dvp_swap_program_client::{confidential::*, DvpSwapProgramError};
 use solana_instruction::error::InstructionError;
 use solana_keypair::Keypair;

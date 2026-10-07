@@ -7,6 +7,9 @@ use crate::{
     },
 };
 use borsh::BorshDeserialize;
+use dvp_swap_program_client::confidential::test_utils::{
+    checked_available_balance, transfer_session, TransferAccounts, TransferRequest,
+};
 use dvp_swap_program_client::{
     confidential::*,
     instructions::{CancelConfidentialDvp, CancelConfidentialDvpInstructionArgs},

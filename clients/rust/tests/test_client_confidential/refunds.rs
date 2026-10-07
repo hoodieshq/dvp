@@ -6,6 +6,9 @@ use crate::{
         TOKEN_2022_PROGRAM_ID as TOKEN,
     },
 };
+use dvp_swap_program_client::confidential::test_utils::{
+    checked_available_balance, ciphertext_matches, AMOUNT_LO_BITS,
+};
 use dvp_swap_program_client::{confidential::*, instructions::*};
 use solana_pubkey::Pubkey;
 use solana_signer::Signer;

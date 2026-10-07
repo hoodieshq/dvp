@@ -86,7 +86,7 @@ fn confidential_swap_rejects_wrong_amount_or_keys() {
     let wrong_keys = EscrowKeys::from_seed(&[0x43; 32]).unwrap();
     assert!(matches!(
         verify_confidential_swap(&swap, &state, &wrong_keys, AMOUNT_B),
-        Err(ConfidentialError::AmountMismatch)
+        Err(ConfidentialError::EscrowKeyMismatch)
     ));
 }
 

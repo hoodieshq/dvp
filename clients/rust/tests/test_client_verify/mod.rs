@@ -171,3 +171,67 @@ fn checked_decode_rejects_account_at_wrong_address() {
         "expected address error, got: {err}"
     );
 }
+
+#[test]
+fn discovery_skips_system_created_program_owned_accounts() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use dvp_swap_program_client::{
+        programs::DVP_SWAP_PROGRAM_ID,
+        verify::{fetch_swap_dvp_accounts, CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN},
+    };
+    use solana_client::{rpc_client::RpcClient, rpc_request::RpcRequest};
+
+    let mut context = TestContext::new();
+    let fixture = setup_dvp(&mut context, 44);
+    assert_create_dvp(&mut context, &fixture);
+    let real = context.get_account(&fixture.swap_dvp).unwrap();
+    let rpc_account = |address: Pubkey, account: &Account| {
+        serde_json::json!({
+            "pubkey": address.to_string(),
+            "account": {"lamports": account.lamports, "owner": account.owner.to_string(),
+                "data": [STANDARD.encode(&account.data), "base64"],
+                "executable": false, "rentEpoch": 0, "space": account.data.len()}
+        })
+    };
+
+    // Anyone can allocate zero-filled DvP-owned accounts through System CreateAccount.
+    let mut responses = vec![];
+    for size in [SWAP_DVP_ACCOUNT_LEN, CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN] {
+        let fake = Keypair::new();
+        let ix = solana_system_interface::instruction::create_account(
+            &context.payer.pubkey(),
+            &fake.pubkey(),
+            context.svm.minimum_balance_for_rent_exemption(size),
+            size as u64,
+            &DVP_SWAP_PROGRAM_ID,
+        );
+        crate::confidential_utils::send_v1(&mut context, &[ix], &[&fake]).unwrap();
+        let account = context.get_account(&fake.pubkey()).unwrap();
+        assert_eq!(account.owner, DVP_SWAP_PROGRAM_ID);
+        assert!(account.data.iter().all(|byte| *byte == 0));
+        let mut accounts = vec![rpc_account(fake.pubkey(), &account)];
+        if size == SWAP_DVP_ACCOUNT_LEN {
+            accounts.push(rpc_account(fixture.swap_dvp, &real));
+        }
+        responses.push((RpcRequest::GetProgramAccounts, serde_json::json!(accounts)));
+    }
+
+    // Feed actual on-chain snapshots through the public RPC discovery API.
+    let rpc = RpcClient::new_mock_with_mocks_map("succeeds", responses.into_iter().collect());
+    let swaps = fetch_swap_dvp_accounts(&rpc).unwrap();
+    assert_eq!(swaps.len(), 1);
+    assert_eq!(swaps[0].0, fixture.swap_dvp);
+    assert_eq!(
+        swaps[0].1,
+        decode_swap_dvp_account(&fixture.swap_dvp, &real).unwrap()
+    );
+}
+
+#[test]
+fn discovery_preserves_rpc_errors() {
+    let rpc = solana_client::rpc_client::RpcClient::new_mock("fails");
+    let error = dvp_swap_program_client::verify::fetch_swap_dvp_accounts(&rpc).unwrap_err();
+    assert!(error
+        .downcast_ref::<solana_client::client_error::ClientError>()
+        .is_some());
+}

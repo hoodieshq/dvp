@@ -8,3 +8,8 @@ pub mod state_utils;
 mod test_client_confidential;
 mod test_client_verify;
 pub mod utils;
+
+// Compile and exercise integrator recipes against real program snapshots.
+#[allow(dead_code)]
+#[path = "../examples/confidential/mod.rs"]
+mod confidential_examples;
