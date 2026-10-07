@@ -1,9 +1,35 @@
-use crate::{
-    error::DvpSwapProgramError, require, require_len, state::swap_dvp::MAX_REF_STRING_LEN,
-};
-use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
+extern crate alloc;
 
-const FIXED_ACCOUNTS_LEN: usize = 15;
+use crate::{
+    error::DvpSwapProgramError,
+    processor::create_dvp::{verify_party_signer_capable, MAX_DVP_DURATION_SECS},
+    processor::shared::account_check::{
+        verify_account_owner, verify_ata_program, verify_signer, verify_system_account,
+        verify_system_program, verify_token_program,
+    },
+    processor::shared::confidential::{
+        configure_confidential_account_cpi, disable_non_confidential_credits_cpi,
+        reallocate_confidential_account_cpi, verify_confidential_mint,
+    },
+    processor::shared::pda_utils::create_pda_account,
+    processor::shared::token_utils::{
+        get_mint_authority, get_token_account_balance, validate_mint_extensions,
+        verify_canonical_ata, verify_escrow_not_preloaded,
+    },
+    require, require_len,
+    state::swap_dvp::{
+        ConfidentialSwapDvp, SwapDvp, MAX_REF_STRING_LEN, NONCE_TOMBSTONE_SEED, SWAP_DVP_SEED,
+    },
+};
+use pinocchio::{
+    account::AccountView,
+    address::Address,
+    cpi::{Seed, Signer},
+    error::ProgramError,
+    sysvars::{clock::Clock, rent::Rent, Sysvar},
+    ProgramResult,
+};
+use pinocchio_associated_token_account::instructions::CreateIdempotent as CreateAtaIdempotent;
 
 /// Processes the CreateConfidentialDvp instruction.
 ///
@@ -23,33 +49,246 @@ const FIXED_ACCOUNTS_LEN: usize = 15;
 /// non-zero relative `pubkey_validity_proof_offset`. There is no public
 /// `amount_b`. The reference string, settlement destinations and earliest
 /// settlement timestamp use the same optional encoding as public Create.
-///
-/// # Implementation Status
-/// Currently decodes the arguments and checks the account count, then returns
-/// `InvalidInstructionData` without creating accounts or invoking Token-2022.
 pub fn process_create_confidential_dvp(
-    _program_id: &Address,
+    program_id: &Address,
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let _args = parse_instruction_data(instruction_data)?;
-
-    require!(
-        accounts.len() >= FIXED_ACCOUNTS_LEN,
-        ProgramError::NotEnoughAccountKeys
-    );
-    let [_payer_info, _swap_dvp_info, _nonce_tombstone_info, _settlement_authority_info, _user_a_info, _user_b_info, _mint_a_info, _mint_b_info, _dvp_ata_a_info, _dvp_ata_b_info, _system_program_info, _token_program_a_info, _token_program_b_info, _associated_token_program_info, _instructions_sysvar_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
+    let args = parse_instruction_data(instruction_data)?;
+    let [payer_info, swap_dvp_info, nonce_tombstone_info, settlement_authority_info, user_a_info, user_b_info, mint_a_info, mint_b_info, dvp_ata_a_info, dvp_ata_b_info, system_program_info, token_program_a_info, token_program_b_info, associated_token_program_info, instructions_sysvar_info] =
+        accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
-    // Reject before any mutation or CPI until this lifecycle operation is implemented.
-    Err(ProgramError::InvalidInstructionData)
+    verify_signer(payer_info, true)?;
+    verify_system_account(swap_dvp_info, true)?;
+    verify_system_program(system_program_info)?;
+    verify_token_program(token_program_a_info)?;
+    require!(
+        token_program_b_info.address() == &pinocchio_token_2022::ID,
+        DvpSwapProgramError::MintNotConfidential
+    );
+    verify_confidential_mint(mint_b_info)?;
+    verify_ata_program(associated_token_program_info)?;
+    require!(
+        instructions_sysvar_info.address() == &pinocchio::sysvars::instructions::INSTRUCTIONS_ID,
+        ProgramError::UnsupportedSysvar
+    );
+    // settlement_authority receives the closed-account rent at Settle/Cancel.
+    // An executable account can't be credited lamports (ExecutableLamportChange),
+    // so reject it at creation rather than stranding funds until Reject/Reclaim.
+    require!(
+        !settlement_authority_info.executable(),
+        DvpSwapProgramError::SettlementAuthorityExecutable
+    );
+    // Each party must be a wallet-style identity so it can authorize the
+    // unwind paths (Reject/Reclaim/Recover) as a signer, either directly
+    // as a keypair or as a smart-wallet PDA via CPI. The settlement
+    // authority needs no such check: if it can't sign, the parties still
+    // recover their funds via Reject/Reclaim.
+    verify_party_signer_capable(user_a_info)?;
+    verify_party_signer_capable(user_b_info)?;
+    verify_account_owner(mint_a_info, token_program_a_info.address())?;
+    verify_account_owner(mint_b_info, token_program_b_info.address())?;
+    validate_mint_extensions(mint_a_info)?;
+    validate_mint_extensions(mint_b_info)?;
+
+    let now = Clock::get()?.unix_timestamp;
+    validate_args(
+        &args,
+        settlement_authority_info.address(),
+        user_a_info.address(),
+        user_b_info.address(),
+        mint_a_info.address(),
+        mint_b_info.address(),
+        now,
+    )?;
+
+    let nonce_bytes = args.nonce.to_le_bytes();
+    let (expected_swap_dvp, bump) = Address::find_program_address(
+        &[
+            SWAP_DVP_SEED,
+            settlement_authority_info.address().as_ref(),
+            user_a_info.address().as_ref(),
+            user_b_info.address().as_ref(),
+            mint_a_info.address().as_ref(),
+            mint_b_info.address().as_ref(),
+            &nonce_bytes,
+        ],
+        program_id,
+    );
+    require!(
+        swap_dvp_info.address() == &expected_swap_dvp,
+        ProgramError::InvalidSeeds
+    );
+
+    // Resolve the destination defaults here (the consent point) so
+    // Settle never branches: delivery always goes to the stored
+    // destination's canonical ATA.
+    let user_a_settlement_destination = args
+        .user_a_settlement_destination
+        .unwrap_or(*user_a_info.address());
+    let user_b_settlement_destination = args
+        .user_b_settlement_destination
+        .unwrap_or(*user_b_info.address());
+    require!(
+        user_a_settlement_destination != expected_swap_dvp
+            && user_b_settlement_destination != expected_swap_dvp,
+        DvpSwapProgramError::SettlementDestinationIsSwapDvp
+    );
+
+    // Nonce tombstone, derived from the SwapDvp address so it's 1:1 with
+    // this trade's seeds. It's created below and never closed, so a
+    // non-system owner here means the nonce was already used - reject
+    // before re-creating the (closed) SwapDvp at the same address.
+    let (expected_tombstone, tombstone_bump) = Address::find_program_address(
+        &[NONCE_TOMBSTONE_SEED, expected_swap_dvp.as_ref()],
+        program_id,
+    );
+    require!(
+        nonce_tombstone_info.address() == &expected_tombstone,
+        ProgramError::InvalidAccountData
+    );
+    require!(
+        nonce_tombstone_info.owned_by(&pinocchio_system::ID),
+        DvpSwapProgramError::NonceAlreadyUsed
+    );
+
+    // dvp_ata_a is the DvP PDA's ATA for mint_a (asset escrow).
+    verify_canonical_ata(
+        dvp_ata_a_info,
+        swap_dvp_info.address(),
+        mint_a_info.address(),
+        token_program_a_info,
+    )?;
+    // dvp_ata_b is the DvP PDA's ATA for mint_b (leg B escrow).
+    verify_canonical_ata(
+        dvp_ata_b_info,
+        swap_dvp_info.address(),
+        mint_b_info.address(),
+        token_program_b_info,
+    )?;
+
+    let base = SwapDvp {
+        bump,
+        user_a: *user_a_info.address(),
+        user_b: *user_b_info.address(),
+        mint_a: *mint_a_info.address(),
+        mint_b: *mint_b_info.address(),
+        settlement_authority: *settlement_authority_info.address(),
+        token_program_a: *token_program_a_info.address(),
+        token_program_b: *token_program_b_info.address(),
+        amount_a: args.amount_a,
+        // Confidential mode stores a sentinel in the fixed-width public base.
+        amount_b: u64::MAX,
+        expiry_timestamp: args.expiry_timestamp,
+        nonce: args.nonce,
+        ref_string: args.ref_string,
+        user_a_settlement_destination,
+        user_b_settlement_destination,
+        mint_a_authority: get_mint_authority(mint_a_info)?.unwrap_or_default(),
+        mint_b_authority: get_mint_authority(mint_b_info)?.unwrap_or_default(),
+        earliest_settlement_timestamp: args.earliest_settlement_timestamp,
+    };
+    let (nonce_bytes, bump_bytes) = base.seed_buffers();
+    let swap_dvp_seeds = base.signing_seeds(&nonce_bytes, &bump_bytes);
+
+    let rent = Rent::get()?;
+    // A preload above the rent reserve would be adopted into the live
+    // PDA and swept to the closer at the terminal instructions.
+    // Up to the reserve is harmless: the payer tops up to exactly it.
+    require!(
+        swap_dvp_info.lamports() <= rent.try_minimum_balance(ConfidentialSwapDvp::LEN)?,
+        DvpSwapProgramError::SwapDvpPreloadedWithLamports
+    );
+    create_pda_account(
+        payer_info,
+        &rent,
+        ConfidentialSwapDvp::LEN,
+        program_id,
+        swap_dvp_info,
+        swap_dvp_seeds.clone(),
+    )?;
+
+    // Mark this nonce used. The tombstone holds no data - its mere
+    // existence (program-owned) is the signal - and is never closed.
+    let tombstone_bump_bytes = [tombstone_bump];
+    let tombstone_seeds = [
+        Seed::from(NONCE_TOMBSTONE_SEED),
+        Seed::from(expected_swap_dvp.as_ref()),
+        Seed::from(&tombstone_bump_bytes),
+    ];
+    create_pda_account(
+        payer_info,
+        &rent,
+        0,
+        program_id,
+        nonce_tombstone_info,
+        tombstone_seeds,
+    )?;
+
+    CreateAtaIdempotent {
+        funding_account: payer_info,
+        account: dvp_ata_a_info,
+        wallet: swap_dvp_info,
+        mint: mint_a_info,
+        system_program: system_program_info,
+        token_program: token_program_a_info,
+    }
+    .invoke()?;
+
+    CreateAtaIdempotent {
+        funding_account: payer_info,
+        account: dvp_ata_b_info,
+        wallet: swap_dvp_info,
+        mint: mint_b_info,
+        system_program: system_program_info,
+        token_program: token_program_b_info,
+    }
+    .invoke()?;
+
+    // A non-native escrow must start with no lamports beyond rent, or
+    // the close paths would sweep the excess to the closer.
+    verify_escrow_not_preloaded(dvp_ata_a_info, &rent)?;
+    // Check the current ATA size before Reallocate increases its rent reserve.
+    verify_escrow_not_preloaded(dvp_ata_b_info, &rent)?;
+
+    require!(
+        get_token_account_balance(dvp_ata_b_info)? == 0,
+        DvpSwapProgramError::EscrowPublicBalanceNotEmpty
+    );
+
+    let signers = [Signer::from(&swap_dvp_seeds)];
+    reallocate_confidential_account_cpi(
+        dvp_ata_b_info,
+        payer_info,
+        system_program_info,
+        swap_dvp_info,
+        &signers,
+    )?;
+    configure_confidential_account_cpi(
+        dvp_ata_b_info,
+        mint_b_info,
+        instructions_sysvar_info,
+        swap_dvp_info,
+        &args.decryptable_zero_balance,
+        args.pubkey_validity_proof_offset,
+        &signers,
+    )?;
+    disable_non_confidential_credits_cpi(dvp_ata_b_info, swap_dvp_info, &signers)?;
+
+    let dvp = ConfidentialSwapDvp {
+        base,
+        amount_b_ciphertext_lo: args.amount_b_ciphertext_lo,
+        amount_b_ciphertext_hi: args.amount_b_ciphertext_hi,
+    };
+    swap_dvp_info
+        .try_borrow_mut()?
+        .copy_from_slice(&dvp.to_bytes());
+    Ok(())
 }
 
-// These arguments are consumed by the lifecycle implementation in a later stage.
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 struct CreateConfidentialDvpArgs {
     amount_a: u64,
@@ -200,6 +439,41 @@ fn parse_instruction_data(data: &[u8]) -> Result<CreateConfidentialDvpArgs, Prog
     })
 }
 
+/// Reject DvPs that can never settle, are degenerate, or have leg
+/// configurations the rest of the processor would mishandle later.
+fn validate_args(
+    args: &CreateConfidentialDvpArgs,
+    settlement_authority: &Address,
+    user_a: &Address,
+    user_b: &Address,
+    mint_a: &Address,
+    mint_b: &Address,
+    now: i64,
+) -> Result<(), ProgramError> {
+    require!(
+        args.expiry_timestamp > now,
+        DvpSwapProgramError::ExpiryNotInFuture
+    );
+    require!(
+        args.expiry_timestamp <= now.saturating_add(MAX_DVP_DURATION_SECS),
+        DvpSwapProgramError::ExpiryTooFarInFuture
+    );
+    if let Some(earliest) = args.earliest_settlement_timestamp {
+        require!(
+            earliest <= args.expiry_timestamp,
+            DvpSwapProgramError::EarliestAfterExpiry
+        );
+    }
+    require!(user_a != user_b, DvpSwapProgramError::SelfDvp);
+    require!(
+        settlement_authority != user_a && settlement_authority != user_b,
+        DvpSwapProgramError::SettlementAuthorityIsParty
+    );
+    require!(mint_a != mint_b, DvpSwapProgramError::SameMint);
+    require!(args.amount_a != 0, DvpSwapProgramError::ZeroAmount);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -207,6 +481,109 @@ mod tests {
 
     const PROOF_OFFSET: usize = 8 * 3 + 64 * 2 + 36;
     const OPTIONS_OFFSET: usize = PROOF_OFFSET + 1;
+
+    #[test]
+    fn validate_confidential_terms() {
+        const NOW: i64 = 1_780_000_000;
+        let user_a = Address::new_from_array([1; 32]);
+        let user_b = Address::new_from_array([2; 32]);
+        let authority = Address::new_from_array([3; 32]);
+        let mint_a = Address::new_from_array([10; 32]);
+        let mint_b = Address::new_from_array([20; 32]);
+        let args = || CreateConfidentialDvpArgs {
+            amount_a: 1_000,
+            expiry_timestamp: NOW + 3_600,
+            nonce: 42,
+            // The program stores encrypted amount limbs without validating plaintext.
+            amount_b_ciphertext_lo: [0; 64],
+            amount_b_ciphertext_hi: [0; 64],
+            decryptable_zero_balance: [0; 36],
+            pubkey_validity_proof_offset: -1,
+            ref_string: [0; MAX_REF_STRING_LEN],
+            user_a_settlement_destination: None,
+            user_b_settlement_destination: None,
+            earliest_settlement_timestamp: None,
+        };
+        for (expiry, earliest, error) in [
+            (NOW + 3_600, None, None),
+            (NOW + MAX_DVP_DURATION_SECS, None, None),
+            (NOW + 3_600, Some(NOW - 1), None),
+            (NOW + 3_600, Some(NOW + 3_600), None),
+            (NOW, None, Some(DvpSwapProgramError::ExpiryNotInFuture)),
+            (NOW - 1, None, Some(DvpSwapProgramError::ExpiryNotInFuture)),
+            (
+                NOW + MAX_DVP_DURATION_SECS + 1,
+                None,
+                Some(DvpSwapProgramError::ExpiryTooFarInFuture),
+            ),
+            (
+                NOW + 3_600,
+                Some(NOW + 3_601),
+                Some(DvpSwapProgramError::EarliestAfterExpiry),
+            ),
+        ] {
+            let mut input = args();
+            input.expiry_timestamp = expiry;
+            input.earliest_settlement_timestamp = earliest;
+            assert_eq!(
+                validate_args(&input, &authority, &user_a, &user_b, &mint_a, &mint_b, NOW),
+                error.map_or(Ok(()), |error| Err(error.into()))
+            );
+        }
+        for (authority, user_a, user_b, mint_a, mint_b, error) in [
+            (
+                authority,
+                user_a,
+                user_a,
+                mint_a,
+                mint_b,
+                DvpSwapProgramError::SelfDvp,
+            ),
+            (
+                user_a,
+                user_a,
+                user_b,
+                mint_a,
+                mint_b,
+                DvpSwapProgramError::SettlementAuthorityIsParty,
+            ),
+            (
+                user_b,
+                user_a,
+                user_b,
+                mint_a,
+                mint_b,
+                DvpSwapProgramError::SettlementAuthorityIsParty,
+            ),
+            (
+                authority,
+                user_a,
+                user_b,
+                mint_a,
+                mint_a,
+                DvpSwapProgramError::SameMint,
+            ),
+        ] {
+            assert_eq!(
+                validate_args(&args(), &authority, &user_a, &user_b, &mint_a, &mint_b, NOW),
+                Err(error.into())
+            );
+        }
+        let mut zero_asset = args();
+        zero_asset.amount_a = 0;
+        assert_eq!(
+            validate_args(
+                &zero_asset,
+                &authority,
+                &user_a,
+                &user_b,
+                &mint_a,
+                &mint_b,
+                NOW
+            ),
+            Err(DvpSwapProgramError::ZeroAmount.into())
+        );
+    }
 
     #[test]
     fn create_options_and_proof_offset_are_strict() {

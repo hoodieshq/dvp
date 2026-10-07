@@ -1,6 +1,12 @@
 use crate::{
-    processor::shared::confidential::{check_confidential_swap, check_refund_contexts, LegBRefund},
+    error::DvpSwapProgramError,
+    processor::shared::{
+        account_check::{verify_account_owner, verify_signer},
+        confidential::{refund_and_close_confidential_dvp, LegBRefund},
+        utils::split_leg_remaining_accounts,
+    },
     require, require_len,
+    state::swap_dvp::ConfidentialSwapDvp,
 };
 use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
 
@@ -11,7 +17,7 @@ const FIXED_ACCOUNTS_LEN: usize = 16;
 /// Confidential counterpart of [`process_reject_dvp`](super::reject_dvp::process_reject_dvp):
 /// either depositor unwinds the swap, including after expiry, without the
 /// settlement authority. Closed-account and proof-context rent goes to that signer.
-/// Cash refund and escrow-closing behavior follow
+/// Leg B refund and escrow-closing behavior follow
 /// [`process_cancel_confidential_dvp`](super::cancel_confidential_dvp::process_cancel_confidential_dvp),
 /// including recovery of any remaining leg B balance after the swap closes.
 ///
@@ -24,43 +30,34 @@ const FIXED_ACCOUNTS_LEN: usize = 16;
 /// `leg_a_extras_count` (u8), then [`LegBRefund`], with the same encoding and
 /// context placeholders as confidential Cancel.
 ///
-/// # Implementation Status
-/// Currently decodes the arguments, checks the account count, optional-context
-/// layout and swap mode, then returns `InvalidInstructionData` without CPIs
-/// or state changes. Authorization and proof validation are not implemented yet.
 pub fn process_reject_confidential_dvp(
     program_id: &Address,
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
     let args = parse_instruction_data(instruction_data)?;
-
-    require!(
-        accounts.len() >= FIXED_ACCOUNTS_LEN,
-        ProgramError::NotEnoughAccountKeys
-    );
-    let [_signer_info, swap_dvp_info, _mint_a_info, _mint_b_info, _dvp_ata_a_info, _dvp_ata_b_info, _user_a_ata_a_info, _user_b_ata_b_info, _token_program_a_info, _token_program_b_info, _memo_program_info, _zk_elgamal_proof_program_info, equality_context_info, validity_context_info, range_context_info, zero_context_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
-    else {
+    let (fixed, leg_a_extras, leg_b_extras) =
+        split_leg_remaining_accounts(accounts, &[args.leg_a_extras_count], FIXED_ACCOUNTS_LEN)?;
+    let [signer_info, swap_dvp_info, ..] = fixed else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-
-    check_confidential_swap(program_id, swap_dvp_info)?;
-    check_refund_contexts(
+    verify_signer(signer_info, true)?;
+    verify_account_owner(swap_dvp_info, program_id)?;
+    let dvp = ConfidentialSwapDvp::load(&swap_dvp_info.try_borrow()?)?;
+    require!(
+        signer_info.address() == &dvp.base.user_a || signer_info.address() == &dvp.base.user_b,
+        DvpSwapProgramError::SignerNotParty
+    );
+    refund_and_close_confidential_dvp(
         program_id,
+        fixed,
+        &dvp.base,
         &args.leg_b_refund,
-        equality_context_info,
-        validity_context_info,
-        range_context_info,
-        zero_context_info,
-    )?;
-
-    // Reject before any mutation or CPI until this lifecycle operation is implemented.
-    Err(ProgramError::InvalidInstructionData)
+        leg_a_extras,
+        leg_b_extras,
+    )
 }
 
-// These arguments are consumed by the lifecycle implementation in a later stage.
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 struct RejectConfidentialDvpArgs {
     leg_a_extras_count: u8,
