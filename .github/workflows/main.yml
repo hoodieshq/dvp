@@ -62,6 +62,12 @@ jobs:
       - name: Verify pinned test programs
         run: make check-test-fixtures
       # Integration tests embed these binaries at compile time.
+      - name: Rust client feature combinations
+        run: |
+          cargo check -p dvp-swap-program-client --no-default-features
+          cargo check -p dvp-swap-program-client --no-default-features --features fetch
+          cargo check -p dvp-swap-program-client --no-default-features --features confidential
+          cargo check -p dvp-swap-program-client --no-default-features --features confidential,fetch --example confidential
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
