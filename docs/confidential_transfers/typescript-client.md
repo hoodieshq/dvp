@@ -10,14 +10,8 @@ integrator. Amounts and nonces are `bigint`.
 
 ## SDK setup
 
-The client temporarily uses `deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz` because
-npm version 0.5.3 lacks `PedersenOpening.fromBytes`. The archive contains the
-Node, web and bundler JS/WASM outputs built with wasm-pack 0.15.0 and the upstream
-Cargo lockfile from commit `453d813a8db0d7c61ad517fc3c4d6009a0a93ce4`, including
-[PR #572](https://github.com/solana-program/zk-elgamal-proof/pull/572). Source and
-build information (`SOURCE.txt`) and the Apache-2.0 license are included.
-Installation uses the ready-built archive; no Rust or wasm-pack is needed for
-the TypeScript client build. The lockfile records the archive's integrity hash.
+The client uses `@solana/zk-sdk` 0.5.4 or newer, the first npm release with
+`PedersenOpening.fromBytes`.
 
 ```sh
 corepack pnpm install --frozen-lockfile
@@ -28,15 +22,10 @@ Use Node 22.12 or newer (see `engines` in `package.json`) and the repository's p
 pnpm 10.15.1. Make targets invoke `pnpm` directly;
 enable Corepack's shim with `corepack enable pnpm` if another version is on PATH.
 
-The pnpm override ensures Token-2022 and DvP use the same SDK instance. When
-consuming this checkout in another project, include the archive and point the
-dependency and override to its location. Browser applications need a bundler
-that supports the SDK's WASM module; the integration suite runs in Node.
-
-Once npm publishes the required opening byte conversion, replace the archive
-dependency with that version, update or remove the override after checking the
-resolved SDK versions, regenerate the lockfile and remove the archive. Rerun
-the shared vectors and integration tests before switching.
+The pnpm override ensures Token-2022, `@solana-program/zk-elgamal-proof` (which
+pins `@solana/zk-sdk` 0.4.1) and DvP use the same SDK instance; consuming
+projects need the same override. Browser applications need a bundler that
+supports the SDK's WASM module; the integration suite runs in Node.
 
 ## Keys and verification
 

@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@solana/zk-sdk': file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz
+  '@solana/zk-sdk': ^0.5.4
 
 importers:
 
@@ -37,7 +37,7 @@ importers:
         version: 0.17.0(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))
       '@solana-program/token-2022':
         specifier: ^0.19.0
-        version: 0.19.0(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/sysvars@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/zk-sdk@file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz)
+        version: 0.19.0(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/sysvars@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/zk-sdk@0.5.4)
       '@solana-program/zk-elgamal-proof':
         specifier: ^0.4.0
         version: 0.4.0(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))
@@ -48,8 +48,8 @@ importers:
         specifier: ^0.0.5
         version: 0.0.5(prettier@3.8.3)
       '@solana/zk-sdk':
-        specifier: file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz
-        version: file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz
+        specifier: ^0.5.4
+        version: 0.5.4
       '@types/node':
         specifier: ^24.3.1
         version: 24.12.2
@@ -291,11 +291,10 @@ packages:
 
   '@solana-program/token-2022@0.19.0':
     resolution: {integrity: sha512-oCCko/n8X6ote2A27HyNpCOIpksiHUnndQQ5wUr2pRm89rrfcKOvRd/zhIXW8z8tpemlPYp05XYUGFBo0GxhBg==}
-    version: 0.19.0
     peerDependencies:
       '@solana/kit': ^8.3.0
       '@solana/sysvars': ^8.0.0
-      '@solana/zk-sdk': ^0.5.1
+      '@solana/zk-sdk': ^0.5.4
     peerDependenciesMeta:
       '@solana/zk-sdk':
         optional: true
@@ -791,9 +790,8 @@ packages:
       typescript:
         optional: true
 
-  '@solana/zk-sdk@file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz':
-    resolution: {integrity: sha512-LMzfzAy56DtMFPuiC0p2abVqhAdjKAuJvb1WK/YDeVmblf6HbcfCX00oYxJ8pA3sxWBnFfj8cgdrMLzABHcL/g==, tarball: file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz}
-    version: 0.5.3-dvp.453d813
+  '@solana/zk-sdk@0.5.4':
+    resolution: {integrity: sha512-pz9zvcRDg1rrB79rv2no5Ko2jOChxZYbKAm+nsbXMAFVGuFbkbnn1H77iTdxzvlxc3szPym/xRfsvlkOhVVh1g==}
 
   '@types/node@24.12.2':
     resolution: {integrity: sha512-A1sre26ke7HDIuY/M23nd9gfB+nrmhtYyMINbjI1zHJxYteKR6qSMX56FsmjMcDb3SMcjJg5BiRRgOCC/yBD0g==}
@@ -1204,7 +1202,7 @@ snapshots:
     dependencies:
       '@solana/kit': 8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)
 
-  '@solana-program/token-2022@0.19.0(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/sysvars@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/zk-sdk@file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz)':
+  '@solana-program/token-2022@0.19.0(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/sysvars@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/zk-sdk@0.5.4)':
     dependencies:
       '@noble/curves': 2.4.0
       '@solana-program/record': 0.5.0(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))
@@ -1213,7 +1211,7 @@ snapshots:
       '@solana/kit': 8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)
       '@solana/sysvars': 8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)
     optionalDependencies:
-      '@solana/zk-sdk': file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz
+      '@solana/zk-sdk': 0.5.4
 
   '@solana-program/token@0.16.1(@solana/kit@8.4.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))':
     dependencies:
@@ -1785,7 +1783,7 @@ snapshots:
     transitivePeerDependencies:
       - fastestsmallesttextencoderdecoder
 
-  '@solana/zk-sdk@file:deps/solana-zk-sdk-0.5.3-dvp.453d813.tgz': {}
+  '@solana/zk-sdk@0.5.4': {}
 
   '@types/node@24.12.2':
     dependencies:

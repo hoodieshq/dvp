@@ -88,16 +88,16 @@ let (escrow_elgamal, escrow_ae) =
     derivation::derive_confidential_keys_from_ikm(&shared_seed)?;
 ```
 
-TypeScript: [`@solana/zk-sdk`](https://www.npmjs.com/package/@solana/zk-sdk) >= 0.5.3 ([GitHub](https://github.com/solana-program/zk-elgamal-proof/tree/main/zk-sdk-wasm-js)).
+TypeScript: [`@solana/zk-sdk`](https://www.npmjs.com/package/@solana/zk-sdk) >= 0.5.4 ([GitHub](https://github.com/solana-program/zk-elgamal-proof/tree/main/zk-sdk-wasm-js)).
 
 ```ts
 const escrowElgamal = ElGamalKeypair.fromSeed(sharedSeed);
 const escrowAe = AeKey.fromSeed(sharedSeed);
 ```
 
-`ConfidentialKeys.fromIkm(sharedSeed)` in 0.5.3 returns both keys in one call, like the Rust function.
+`ConfidentialKeys.fromIkm(sharedSeed)` returns both keys in one call, like the Rust function.
 
-Both run the same HKDF-SHA512 chain, so the keys are identical in Rust and TypeScript (`@solana/zk-sdk` 0.5.3 wraps `solana-zk-sdk` 8.0.1); the test vectors (4.5) check it.
+Both run the same HKDF-SHA512 chain, so the keys are identical in Rust and TypeScript (`@solana/zk-sdk` 0.5.4 wraps `solana-zk-sdk` 8.1.0); the test vectors (4.5) check it.
 
 ### 4.3 Amount ciphertexts
 
@@ -126,7 +126,7 @@ let enc_hi = pk.encrypt_with(hi, &opening(b"opening-hi"));
 
 Each ciphertext is stored as a 64-byte `PodElGamalCiphertext`. They depend only on `(shared_seed, amount_b)`, so any party recomputes them to verify a swap (4.4) and rebuilds the Settle equality proofs from the seed alone.
 
-TypeScript: `@solana/zk-sdk` 0.5.3 has no `PedersenOpening.fromBytes`, which these ciphertexts and the Settle equality proofs need; it is added upstream in `zk-sdk-wasm-js` as [PR #572](https://github.com/solana-program/zk-elgamal-proof/pull/572). The client installs a checked-in archive built from the pinned upstream revision described in [typescript-client.md](typescript-client.md).
+TypeScript: these ciphertexts and the Settle equality proofs need `PedersenOpening.fromBytes`, available in `@solana/zk-sdk` 0.5.4 and later.
 
 ### 4.4 Verification before funding
 
@@ -643,12 +643,12 @@ Rust and TypeScript client helpers:
 | Rust `read_escrow_balance`, `BalanceHistory` / TS `readEscrowBalance`, `BalanceHistory` | available and pending balance of escrow B; rebuilt from transaction history when the decryptable balance is wrong |
 | Rust `create_session`, `apply_session`, `settle_session`, `refund_session` / TS `createSession`, `applySession`, `settleSession`, `refundSession` | ordered preparatory and final transactions for Settle and every refund path (`Full`, `Partial`, public balance withdrawal), in v1 or v0 + LUT, with CT hook extras resolved at `u64::MAX` and public-withdrawal extras at the actual public amount; Apply is a single transaction. Sending and retries are the caller's |
 
-In TypeScript, `encryptAmount` and the Settle builder need `PedersenOpening.fromBytes` in `@solana/zk-sdk` (4.3).
+In TypeScript, `encryptAmount` and the Settle builder need `PedersenOpening.fromBytes` from `@solana/zk-sdk` 0.5.4 or later (4.3).
 
 Dependencies:
 
 - Rust: `solana-zk-sdk` 7.0.1 (8.x once `spl-token-confidential-transfer-proof-generation` supports it), `spl-token-confidential-transfer-proof-generation` 0.6.1, `spl-record`.
-- TypeScript: `@solana/zk-sdk` >= 0.5.3 with `PedersenOpening.fromBytes`, `@solana-program/token-2022`, `@solana-program/zk-elgamal-proof`, `@solana-program/record` and `@solana/kit` 8.x for v1 messages.
+- TypeScript: `@solana/zk-sdk` >= 0.5.4, `@solana-program/token-2022`, `@solana-program/zk-elgamal-proof`, `@solana-program/record` and `@solana/kit` 8.x for v1 messages.
 
 ## 13. Tests
 
