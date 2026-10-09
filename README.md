@@ -138,8 +138,8 @@ PDA seeds: `[b"dvp", settlement_authority, user_a, user_b, mint_a, mint_b, nonce
 
 ```sh
 make build              # generate clients + cargo-build-sbf
-make unit-test          # program crate's #[cfg(test)] modules + JS client tests
-make integration-test   # build + LiteSVM integration tests
+make unit-test          # program and Rust client unit tests
+make integration-test   # build + Rust integration and all TypeScript client tests
 make fmt                # cargo fmt + clippy + pnpm format
 make verify-program-id  # pre-deploy: deploy keypair matches the declared program ID
 ```

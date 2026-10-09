@@ -86,10 +86,9 @@ fmt:
 	@cd tests/integration-tests && cargo clippy --all-targets -- -D warnings
 	pnpm format
 
-# Unit tests: program and Rust/JS clients.
+# Unit tests: program and Rust client.
 unit-test:
 	@echo "Running unit tests for swap program..."
-	pnpm test:unit
 	@cd program && cargo test
 	@cargo test -p dvp-swap-program-client --all-features --lib
 
@@ -98,10 +97,15 @@ integration-test-no-build: check-test-fixtures
 	@echo "Running integration tests for swap program..."
 	@cd tests/integration-tests && cargo test -- --nocapture
 	@cargo test -p dvp-swap-program-client --all-features --test integration -- --nocapture
+	$(MAKE) typescript-test
+
+.PHONY: typescript-test
+typescript-test: check-test-fixtures
+	pnpm test
 
 integration-test: build integration-test-no-build
 
-# Generate clients before JS unit tests, including on a clean checkout.
+# Generate clients and build all programs before running the full test suite.
 all-test: build
 	$(MAKE) unit-test integration-test-no-build
 
