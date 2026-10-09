@@ -40,6 +40,7 @@ import {
 import { assertU64, bytesEqual, parseCiphertext } from "./math";
 import { prepareTransfer, checkRecipient } from "./proofs";
 import { SessionBuilder, ProofKind, type SessionConfig } from "./transaction";
+import { ConfidentialError } from "./errors";
 
 export type TransferSource<
   TKeys extends ConfidentialAccountKeys = ConfidentialAccountKeys,
@@ -57,7 +58,7 @@ export function hookExtras(extras: HookExtras): AccountMeta[] {
   const a = extras.legA ?? [],
     b = extras.legB ?? [];
   if (a.length > 32 || b.length > 32)
-    throw new Error("At most 32 hook extras per leg");
+    throw new ConfidentialError("Account", "At most 32 hook extras per leg");
   return [...a, ...b].map((meta) => ({
     address: meta.address,
     role: downgradeRoleToNonSigner(meta.role),
@@ -85,6 +86,8 @@ export function createSession(
     proof = new PubkeyValidityProofData(keys.elgamal),
     zero = keys.ae.encrypt(0n);
   try {
+    // Rust passes settlement_authority here. Create prepares no contexts, so the
+    // session authority is unused and the payer is equivalent.
     return new SessionBuilder(config, config.payer).finish([
       getVerifyProofInstruction({
         discriminator: ProofKind.Pubkey,
@@ -178,7 +181,10 @@ export async function settleSession(
     config.format === 0 &&
     (extras.legA?.length ?? 0) + (extras.legB?.length ?? 0) > 0
   )
-    throw new Error("Hooked Settle requires v1");
+    throw new ConfidentialError(
+      "HookedSettleRequiresV1",
+      "Hooked Settle requires v1",
+    );
   const { source } = request;
   checkEscrowKeys(source.state, source.keys);
   const expected = source.keys.encryptAmount(request.expectedAmountB);
@@ -186,17 +192,26 @@ export async function settleSession(
     !bytesEqual(expected.lo, request.swap.amountB.lo) ||
     !bytesEqual(expected.hi, request.swap.amountB.hi)
   )
-    throw new Error("Confidential amount mismatch");
+    throw new ConfidentialError(
+      "AmountMismatch",
+      "Confidential amount mismatch",
+    );
   const balance = readAvailableBalance(
     source.state,
     source.keys,
     source.history,
   );
   if (balance < request.expectedAmountB)
-    throw new Error("Insufficient available balance");
+    throw new ConfidentialError(
+      "InsufficientAvailable",
+      "Insufficient available balance",
+    );
   const surplus = balance - request.expectedAmountB;
   if (surplus > MAX_TRANSFER_AMOUNT)
-    throw new Error("Surplus exceeds 2^48-1; reclaim partially first");
+    throw new ConfidentialError(
+      "SurplusTooLarge",
+      "Surplus exceeds 2^48-1; reclaim partially first",
+    );
   // Payment and surplus each add one credit when they share the same recipient.
   const paymentCredits =
     surplus > 0n && input.userADestinationAtaB === input.userBAtaB ? 2n : 1n;
@@ -333,7 +348,7 @@ export async function refundSession(
 ) {
   hookExtras(extras);
   if (instruction.kind === "recover" && extras.legA?.length)
-    throw new Error("Recover has only leg B extras");
+    throw new ConfidentialError("Account", "Recover has only leg B extras");
   const authority =
     instruction.kind === "cancel"
       ? instruction.input.settlementAuthority
@@ -353,14 +368,18 @@ export async function refundSession(
     );
     if (request.amount.kind === "none") {
       if (source.state.availableBalance.some((byte) => byte !== 0))
-        throw new Error(
+        throw new ConfidentialError(
+          "BalanceMismatch",
           "None refund requires an all-zero available ciphertext",
         );
     } else {
       const amount =
         request.amount.kind === "full" ? balance : request.amount.amount;
       if (request.amount.kind === "partial" && amount === 0n)
-        throw new Error("Partial refund must be nonzero");
+        throw new ConfidentialError(
+          "ZeroPartialRefund",
+          "Partial refund must be nonzero",
+        );
       const transfer = await prepareTransfer(
         session,
         source.keys,

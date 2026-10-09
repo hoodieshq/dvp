@@ -65,7 +65,7 @@ test("resolve confidential hooks and settle with a required recipient memo", asy
       settleSession({ ...f.config, format: 0 }, f.settle, request, {
         legB: extras,
       }),
-      /Hooked Settle requires v1/,
+      { name: "ConfidentialError", code: "HookedSettleRequiresV1" },
     );
     const history = await execute(
       context,

@@ -36,6 +36,7 @@ import {
   ZkElGamalProofInstruction,
 } from "@solana-program/zk-elgamal-proof";
 import { U64_MAX } from "./constants";
+import { ConfidentialError } from "./errors";
 
 const MICRO_LAMPORTS_PER_LAMPORT = 1_000_000n;
 // SPL Record header: version byte followed by the write authority.
@@ -136,7 +137,10 @@ export class PlannedTransaction {
     const size = this.wireSize(config),
       limit = transactionSizeLimit(config);
     if (size > limit)
-      throw new Error(`Transaction too large: ${size} > ${limit}`);
+      throw new ConfidentialError(
+        "TransactionTooLarge",
+        `Transaction too large: ${size} > ${limit}`,
+      );
   }
 
   /** Includes temporary account signers carried by the instructions. Send v1 as base64. */
@@ -157,10 +161,23 @@ type Proof = {
 export class SessionBuilder {
   private preparation: PlannedTransaction[] = [];
   private cleanup: Instruction[] = [];
+  // One lookup per account size; a session reuses the same few sizes.
+  private rent = new Map<number, Promise<bigint>>();
   constructor(
     private config: SessionConfig,
     private authority: TransactionSigner,
   ) {}
+
+  private rentExempt(space: number): Promise<bigint> {
+    let lamports = this.rent.get(space);
+    if (!lamports) {
+      lamports = Promise.resolve(
+        this.config.minimumBalanceForRentExemption(space),
+      );
+      this.rent.set(space, lamports);
+    }
+    return lamports;
+  }
 
   private append(instructions: Instruction[]): void {
     new PlannedTransaction(instructions).checkSize(this.config);
@@ -195,7 +212,7 @@ export class SessionBuilder {
     const create = getCreateAccountInstruction({
       payer: this.config.payer,
       newAccount: context,
-      lamports: await this.config.minimumBalanceForRentExemption(space),
+      lamports: await this.rentExempt(space),
       space,
       programAddress: ZK_ELGAMAL_PROOF_PROGRAM_ADDRESS,
     });
@@ -220,7 +237,7 @@ export class SessionBuilder {
         getCreateAccountInstruction({
           payer: this.config.payer,
           newAccount: record,
-          lamports: await this.config.minimumBalanceForRentExemption(space),
+          lamports: await this.rentExempt(space),
           space,
           programAddress: RECORD_PROGRAM_ADDRESS,
         }),
@@ -246,7 +263,10 @@ export class SessionBuilder {
           }
           end -= size - transactionSizeLimit(this.config);
           if (end <= offset)
-            throw new Error("Record write cannot fit in a transaction");
+            throw new ConfidentialError(
+              "Transaction",
+              "Record write cannot fit in a transaction",
+            );
         }
         offset = end;
       }

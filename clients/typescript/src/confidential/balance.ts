@@ -16,6 +16,7 @@ import { findSwapDvpEscrowAta, type ConfidentialSwapDvp } from "../verify";
 import { EscrowKeys, type ConfidentialAccountKeys } from "./keys";
 import { AMOUNT_LO_BITS, MAX_TRANSFER_AMOUNT } from "./constants";
 import { assertU64, bytesEqual, ciphertextMatches, decryptLimb } from "./math";
+import { ConfidentialError } from "./errors";
 
 export type ConfidentialTransferAccount = Extract<
   Extension,
@@ -39,7 +40,11 @@ export function confidentialState(token: Token): ConfidentialTransferAccount {
         (e) => e.__kind === "ConfidentialTransferAccount",
       )
     : undefined;
-  if (!state) throw new Error("Missing confidential transfer extension");
+  if (!state)
+    throw new ConfidentialError(
+      "Account",
+      "Missing confidential transfer extension",
+    );
   return state;
 }
 
@@ -57,31 +62,28 @@ export async function readEscrowAccount(
     account.programAddress !== TOKEN_2022_PROGRAM_ADDRESS ||
     account.address !== expected
   )
-    throw new Error("Wrong escrow owner or address");
+    throw new ConfidentialError("Account", "Wrong escrow owner or address");
   const token = getTokenDecoder().decode(account.data);
   if (token.owner !== swap || token.mint !== mint)
-    throw new Error("Wrong escrow authority or mint");
+    throw new ConfidentialError("Account", "Wrong escrow authority or mint");
   return { state: confidentialState(token), public: token.amount };
 }
 
 export function mintAuditor(account: EncodedAccount): Uint8Array | undefined {
   if (account.programAddress !== TOKEN_2022_PROGRAM_ADDRESS)
-    throw new Error("Wrong mint program");
+    throw new ConfidentialError("Account", "Wrong mint program");
   const mint = getMintDecoder().decode(account.data);
   const ct = isSome(mint.extensions)
     ? mint.extensions.value.find((e) => e.__kind === "ConfidentialTransferMint")
     : undefined;
-  if (!ct) throw new Error("Missing confidential mint extension");
+  if (!ct)
+    throw new ConfidentialError(
+      "Account",
+      "Missing confidential mint extension",
+    );
   return isSome(ct.auditorElgamalPubkey)
     ? new Uint8Array(getAddressEncoder().encode(ct.auditorElgamalPubkey.value))
     : undefined;
-}
-
-export class EscrowKeyMismatchError extends Error {
-  constructor() {
-    super("Wrong escrow ElGamal key");
-    this.name = "EscrowKeyMismatchError";
-  }
 }
 
 export function checkEscrowKeys(
@@ -96,7 +98,10 @@ export function checkEscrowKeys(
         pubkey.toBytes(),
       )
     )
-      throw new EscrowKeyMismatchError();
+      throw new ConfidentialError(
+        "EscrowKeyMismatch",
+        "Wrong escrow ElGamal key",
+      );
   } finally {
     pubkey.free();
   }
@@ -110,14 +115,21 @@ export function checkedAvailableBalance(
   const ae = AeCiphertext.fromBytes(
     new Uint8Array(state.decryptableAvailableBalance),
   );
-  if (!ae) throw new Error("Invalid decryptable balance");
+  if (!ae)
+    throw new ConfidentialError(
+      "BalanceMismatch",
+      "Invalid decryptable balance",
+    );
   try {
     const amount = ae.decrypt(keys.ae);
     if (
       amount === undefined ||
       !ciphertextMatches(state.availableBalance, keys, amount)
     )
-      throw new Error("AE and ElGamal balances disagree");
+      throw new ConfidentialError(
+        "BalanceMismatch",
+        "AE and ElGamal balances disagree",
+      );
     return amount;
   } finally {
     ae.free();
@@ -131,16 +143,22 @@ export function verifyConfidentialSwap(
   amount: bigint,
 ): void {
   if (swap.base.tokenProgramB !== TOKEN_2022_PROGRAM_ADDRESS)
-    throw new Error("Wrong leg B token program");
+    throw new ConfidentialError("Account", "Wrong leg B token program");
   checkEscrowKeys(state, keys);
   const expected = keys.encryptAmount(amount);
   if (
     !bytesEqual(expected.lo, swap.amountB.lo) ||
     !bytesEqual(expected.hi, swap.amountB.hi)
   )
-    throw new Error("Confidential amount mismatch");
+    throw new ConfidentialError(
+      "AmountMismatch",
+      "Confidential amount mismatch",
+    );
   if (!state.approved || !state.allowConfidentialCredits)
-    throw new Error("Escrow does not accept confidential credits");
+    throw new ConfidentialError(
+      "Account",
+      "Escrow does not accept confidential credits",
+    );
   checkedAvailableBalance(state, keys);
 }
 
@@ -164,18 +182,21 @@ export function recoverEscrowBalance(
         const low =
           event.kind === "deposit"
             ? event.amount & ((1n << AMOUNT_LO_BITS) - 1n)
-            : decryptLimb(event.lo, keys);
+            : historyLimb(event.lo, keys);
         const high =
           event.kind === "deposit"
             ? event.amount >> AMOUNT_LO_BITS
-            : decryptLimb(event.hi, keys);
+            : historyLimb(event.hi, keys);
         const amount = low + (high << AMOUNT_LO_BITS);
         if (
           low >= 1n << AMOUNT_LO_BITS ||
           amount < 0n ||
           amount > MAX_TRANSFER_AMOUNT
         )
-          throw new Error("Invalid history transfer amount");
+          throw new ConfidentialError(
+            "IncompleteHistory",
+            "Invalid history transfer amount",
+          );
         if (event.kind === "debit") {
           available -= amount;
           assertU64(available);
@@ -201,7 +222,10 @@ export function recoverEscrowBalance(
         break;
       case "empty":
         if (available || lo || hi)
-          throw new Error("Nonzero balance before Empty");
+          throw new ConfidentialError(
+            "IncompleteHistory",
+            "Nonzero balance before Empty",
+          );
         break;
     }
   }
@@ -211,7 +235,10 @@ export function recoverEscrowBalance(
     !ciphertextMatches(state.pendingBalanceHigh, keys, hi) ||
     counter !== state.pendingBalanceCreditCounter
   )
-    throw new Error("Incomplete balance history");
+    throw new ConfidentialError(
+      "IncompleteHistory",
+      "Incomplete balance history",
+    );
   const pending = lo + (hi << AMOUNT_LO_BITS);
   assertU64(pending);
   assertU64(publicAmount);
@@ -223,16 +250,28 @@ export function recoverEscrowBalance(
   };
 }
 
+/** Limbs above 32 bits fail SDK decryption; report them as invalid history. */
+function historyLimb(bytes: Uint8Array, keys: ConfidentialAccountKeys): bigint {
+  try {
+    return decryptLimb(bytes, keys);
+  } catch (cause) {
+    throw new ConfidentialError(
+      "IncompleteHistory",
+      "Invalid history transfer amount",
+      { cause },
+    );
+  }
+}
+
 export function readAvailableBalance(
   state: ConfidentialTransferAccount,
   keys: ConfidentialAccountKeys,
   history: readonly BalanceEvent[] = [],
 ): bigint {
-  try {
-    return checkedAvailableBalance(state, keys);
-  } catch {
-    return recoverEscrowBalance(state, 0n, keys, history).available;
-  }
+  return withHistoryFallback(
+    () => checkedAvailableBalance(state, keys),
+    () => recoverEscrowBalance(state, 0n, keys, history).available,
+  );
 }
 
 export function readEscrowBalance(
@@ -241,20 +280,43 @@ export function readEscrowBalance(
   keys: ConfidentialAccountKeys,
   history: readonly BalanceEvent[] = [],
 ): EscrowBalance {
+  return withHistoryFallback(
+    () => {
+      const available = checkedAvailableBalance(state, keys);
+      const lo = decryptLimb(state.pendingBalanceLow, keys),
+        hi = decryptLimb(state.pendingBalanceHigh, keys);
+      const pending = lo + (hi << AMOUNT_LO_BITS);
+      assertU64(pending);
+      assertU64(publicAmount);
+      return {
+        available,
+        pending,
+        pendingCreditCounter: state.pendingBalanceCreditCounter,
+        public: publicAmount,
+      };
+    },
+    () => recoverEscrowBalance(state, publicAmount, keys, history),
+  );
+}
+
+/** Falls back to history when AE is unusable; a history failure keeps the AE error as `cause`. */
+function withHistoryFallback<T>(checked: () => T, recover: () => T): T {
+  let aeError: unknown;
   try {
-    const available = checkedAvailableBalance(state, keys);
-    const lo = decryptLimb(state.pendingBalanceLow, keys),
-      hi = decryptLimb(state.pendingBalanceHigh, keys);
-    const pending = lo + (hi << AMOUNT_LO_BITS);
-    assertU64(pending);
-    assertU64(publicAmount);
-    return {
-      available,
-      pending,
-      pendingCreditCounter: state.pendingBalanceCreditCounter,
-      public: publicAmount,
-    };
-  } catch {
-    return recoverEscrowBalance(state, publicAmount, keys, history);
+    return checked();
+  } catch (error) {
+    // History cannot repair a foreign key.
+    if (
+      error instanceof ConfidentialError &&
+      error.code === "EscrowKeyMismatch"
+    )
+      throw error;
+    aeError = error;
+  }
+  try {
+    return recover();
+  } catch (error) {
+    if (!(error instanceof ConfidentialError)) throw error;
+    throw new ConfidentialError(error.code, error.message, { cause: aeError });
   }
 }

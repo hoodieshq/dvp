@@ -1,6 +1,7 @@
+import { prepareRefund } from "../../../examples/confidential/refunds";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readEscrowBalance, refundSession } from "../../confidential";
+import { readEscrowBalance } from "../../confidential";
 import { TestContext, execute } from "./context";
 import { createAndFund, fixture } from "./utils";
 
@@ -17,10 +18,9 @@ test("Partial Cancel followed by full Recover", async () => {
     await execute(
       context,
       f.config,
-      await refundSession(f.config, instruction, {
-        source: f.source(),
-        recipient: f.state(f.common.userBAtaB),
-        amount: { kind: "partial", amount: f.amount / 2n },
+      await prepareRefund(context.rpc, f.config, instruction, f.keys, {
+        kind: "partial",
+        amount: f.amount / 2n,
       }),
     );
     assert.equal(context.account(f.common.swapDvp), undefined);
@@ -36,14 +36,12 @@ test("Partial Cancel followed by full Recover", async () => {
     await execute(
       context,
       f.config,
-      await refundSession(
+      await prepareRefund(
+        context.rpc,
         f.config,
         { kind: "recover", input: f.recover },
-        {
-          source: f.source(),
-          recipient: f.state(f.common.userBAtaB),
-          amount: { kind: "full" },
-        },
+        f.keys,
+        { kind: "full" },
       ),
     );
     assert.equal(context.account(f.common.dvpAtaB), undefined);

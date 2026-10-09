@@ -61,6 +61,8 @@ for (const format of [1, 0] as const) {
     full.checkSize(config);
     const withFee = { ...config, computeUnitPrice: 3n };
     assert.throws(() => full.checkSize(withFee), {
+      name: "ConfidentialError",
+      code: "TransactionTooLarge",
       message: `Transaction too large: ${full.wireSize(withFee)} > ${limit}`,
     });
     for (const price of [-1n, U64_MAX + 1n]) {

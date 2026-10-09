@@ -6,6 +6,7 @@ import { ristretto255 } from "@noble/curves/ed25519.js";
 
 import type { AmountCiphertexts } from "./types";
 import { AMOUNT_LO_BITS, MAX_TRANSFER_AMOUNT } from "./constants";
+import { ConfidentialError } from "./errors";
 const SEED_DOMAIN = new TextEncoder().encode(
   "dvp/confidential-amount-b/seed/v1",
 );
@@ -67,7 +68,10 @@ export class EscrowKeys {
 
   encryptAmount(amount: bigint): AmountCiphertexts {
     if (amount <= 0n || amount > MAX_TRANSFER_AMOUNT)
-      throw new Error("Amount must be in 1..2^48-1");
+      throw new ConfidentialError(
+        "InvalidAmount",
+        "Amount must be in 1..2^48-1",
+      );
     const pubkey = this.elgamal.pubkey();
     const lo = pubkey.encryptWith(
       amount & ((1n << AMOUNT_LO_BITS) - 1n),

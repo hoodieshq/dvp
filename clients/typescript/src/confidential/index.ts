@@ -46,4 +46,4 @@ export {
 export { resolveConfidentialHookAccounts } from "./hooks";
 export type { AmountCiphertexts } from "./types";
 export { verifyConfidentialFunding } from "./verify";
-export { EscrowKeyMismatchError } from "./balance";
+export { ConfidentialError, type ConfidentialErrorCode } from "./errors";

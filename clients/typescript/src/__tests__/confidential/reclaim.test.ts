@@ -1,3 +1,4 @@
+import { prepareRefund } from "../../../examples/confidential/refunds";
 import { getTokenDecoder } from "@solana-program/token-2022";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -37,14 +38,12 @@ test("Partial Reclaim followed by Full Reclaim (v0)", async () => {
     await execute(
       context,
       f.config,
-      await refundSession(
+      await prepareRefund(
+        context.rpc,
         f.config,
         { kind: "reclaim", input: f.reclaim },
-        {
-          source: f.source(),
-          recipient: f.state(f.common.userBAtaB),
-          amount: { kind: "full" },
-        },
+        f.keys,
+        { kind: "full" },
       ),
     );
     assert.equal(

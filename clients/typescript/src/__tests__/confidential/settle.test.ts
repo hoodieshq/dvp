@@ -72,11 +72,22 @@ for (const format of [1, 0] as const) {
         auditor: true,
       });
     // Exercise fee-aware proof packing, including SPL Record writes in v0.
-    f.config = { ...f.config, computeUnitPrice: 3n };
+    // Record rent lookups to check that each account size is fetched once.
+    const rentSizes: number[] = [];
+    f.config = {
+      ...f.config,
+      computeUnitPrice: 3n,
+      minimumBalanceForRentExemption: (space) => {
+        rentSizes.push(space);
+        return context.minimumBalanceForRentExemption(BigInt(space));
+      },
+    };
     const surplus = (1n << AMOUNT_LO_BITS) + 1n;
     try {
       await createAndFund(context, f, f.amount + surplus);
 
+      // Count only the Settle session; funding builds its own sessions.
+      rentSizes.length = 0;
       await execute(
         context,
         f.config,
@@ -88,6 +99,8 @@ for (const format of [1, 0] as const) {
           f.amount,
         ),
       );
+      assert(rentSizes.length > 0);
+      assert.equal(new Set(rentSizes).size, rentSizes.length);
       assert.equal(context.account(f.common.swapDvp), undefined);
       assert.equal(
         readEscrowBalance(f.state(address(f.recipient)), 0n, f.recipientKeys)

@@ -33,6 +33,7 @@ import {
 import { RECORD_HEADER_SIZE, ProofKind } from "./transaction";
 import type { BalanceEvent } from "./balance";
 import { extractCiphertext } from "./math";
+import { ConfidentialError } from "./errors";
 
 export type ExecutedTransaction = Readonly<{
   instructions: readonly Instruction[];
@@ -61,11 +62,18 @@ export type RpcTransaction = Readonly<{
 export function executedTransactionFromRpc(
   value: RpcTransaction,
 ): ExecutedTransaction {
-  if (!value.meta) throw new Error("Missing transaction metadata");
+  if (!value.meta)
+    throw new ConfidentialError(
+      "IncompleteHistory",
+      "Missing transaction metadata",
+    );
   if (value.meta.err !== null)
     return { instructions: [], innerInstructions: new Map(), succeeded: false };
   if (!value.meta.innerInstructions)
-    throw new Error("Missing inner instruction metadata");
+    throw new ConfidentialError(
+      "IncompleteHistory",
+      "Missing inner instruction metadata",
+    );
   const { compiledMessage: message, loadedAddresses: loaded } =
     decodeTransactionFromRpcResponse(value);
   if (message.version === 0) {
@@ -83,7 +91,10 @@ export function executedTransactionFromRpc(
       (loaded?.writable.length ?? 0) !== writable ||
       (loaded?.readonly.length ?? 0) !== readonly
     )
-      throw new Error("Missing historical lookup addresses");
+      throw new ConfidentialError(
+        "IncompleteHistory",
+        "Missing historical lookup addresses",
+      );
   }
   const accountMetas = getAccountMetasFromCompiledTransactionMessage(
     message,
@@ -100,7 +111,10 @@ export function executedTransactionFromRpc(
       group.index >= instructions.length ||
       innerInstructions.has(group.index)
     )
-      throw new Error("Invalid inner instruction group");
+      throw new ConfidentialError(
+        "IncompleteHistory",
+        "Invalid inner instruction group",
+      );
     innerInstructions.set(group.index, []);
   }
   for (const ix of getInnerInstructionsFromMeta(value.meta, accountMetas)) {
@@ -153,9 +167,16 @@ export class BalanceHistory {
               !Number.isSafeInteger(start) ||
               start + write.data.length > 10 * 1024 * 1024
             )
-              throw new Error("Invalid Record write");
+              throw new ConfidentialError(
+                "IncompleteHistory",
+                "Invalid Record write",
+              );
             const previous = this.records.get(address);
-            if (!previous) throw new Error("Missing Record initialization");
+            if (!previous)
+              throw new ConfidentialError(
+                "IncompleteHistory",
+                "Missing Record initialization",
+              );
             const bytes = new Uint8Array(
               Math.max(previous.length, start + write.data.length),
             );
@@ -192,18 +213,25 @@ export class BalanceHistory {
       ix.programAddress !== ZK_ELGAMAL_PROOF_PROGRAM_ADDRESS ||
       data[0] !== ProofKind.GroupedValidity
     )
-      throw new Error("Wrong validity proof");
+      throw new ConfidentialError("IncompleteHistory", "Wrong validity proof");
     const proof = getVerifyProofInstructionDataDecoder().decode(data);
     let bytes: Uint8Array;
     if (proof.offset !== undefined) {
       const record = this.records.get(account(ix, 0)) ?? resolve(ix);
-      if (!record) throw new Error("Historical proof account data required");
+      if (!record)
+        throw new ConfidentialError(
+          "IncompleteHistory",
+          "Historical proof account data required",
+        );
       bytes = record.subarray(proof.offset);
     } else {
       bytes = new Uint8Array(proof.proofData);
     }
     if (bytes.length < VALIDITY_CONTEXT_SIZE)
-      throw new Error("Truncated validity context");
+      throw new ConfidentialError(
+        "IncompleteHistory",
+        "Truncated validity context",
+      );
     return bytes.slice(0, VALIDITY_CONTEXT_SIZE);
   }
 
@@ -218,13 +246,21 @@ export class BalanceHistory {
     const [equality, validity, range] = offsets;
     if (validity) {
       const proof = top[index + validity];
-      if (!proof) throw new Error("Missing inline proof");
+      if (!proof)
+        throw new ConfidentialError(
+          "IncompleteHistory",
+          "Missing inline proof",
+        );
       return this.validity(proof, resolve);
     }
     const position =
       fixed + Number(equality !== 0 || range !== 0) + Number(equality === 0);
     const context = this.contexts.get(account(ix, position));
-    if (!context) throw new Error("Missing verified context history");
+    if (!context)
+      throw new ConfidentialError(
+        "IncompleteHistory",
+        "Missing verified context history",
+      );
     return context;
   }
 
@@ -288,7 +324,10 @@ export class BalanceHistory {
       kind === Token2022Instruction.ConfidentialTransferWithFee &&
       (account(ix, 0) === this.escrow || account(ix, 2) === this.escrow)
     ) {
-      throw new Error("Confidential TransferWithFee history is unsupported");
+      throw new ConfidentialError(
+        "IncompleteHistory",
+        "Confidential TransferWithFee history is unsupported",
+      );
     } else if (
       account(ix, 0) === this.escrow &&
       kind !== Token2022Instruction.ConfidentialMint &&
@@ -340,6 +379,10 @@ export class BalanceHistory {
 
 function account(ix: Instruction, index: number): Address {
   const address = ix.accounts?.[index]?.address;
-  if (!address) throw new Error("Missing history instruction account");
+  if (!address)
+    throw new ConfidentialError(
+      "IncompleteHistory",
+      "Missing history instruction account",
+    );
   return address;
 }

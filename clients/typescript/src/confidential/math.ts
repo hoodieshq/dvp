@@ -4,19 +4,21 @@ import { ElGamalCiphertext } from "@solana/zk-sdk";
 import { type ConfidentialAccountKeys, readLittleEndian } from "./keys";
 
 import { AMOUNT_LO_BITS, U64_MAX } from "./constants";
+import { ConfidentialError } from "./errors";
 
 const Point = ristretto255.Point;
 
 export function assertU64(value: bigint): void {
   if (value < 0n || value > U64_MAX)
-    throw new Error("Balance arithmetic overflow");
+    throw new ConfidentialError("Arithmetic", "Balance arithmetic overflow");
 }
 
 export { bytesEqual } from "@solana/kit";
 
 export function parseCiphertext(bytes: ReadonlyUint8Array): ElGamalCiphertext {
   const ciphertext = ElGamalCiphertext.fromBytes(new Uint8Array(bytes));
-  if (!ciphertext) throw new Error("Invalid ElGamal ciphertext");
+  if (!ciphertext)
+    throw new ConfidentialError("Account", "Invalid ElGamal ciphertext");
   return ciphertext;
 }
 
@@ -67,7 +69,7 @@ export function extractCiphertext(
   handle: number,
 ): Uint8Array {
   if (group.length !== 128 || handle < 0 || handle > 2)
-    throw new Error("Invalid grouped ciphertext");
+    throw new ConfidentialError("Account", "Invalid grouped ciphertext");
   return new Uint8Array([
     ...group.slice(0, 32),
     ...group.slice(32 + handle * 32, 64 + handle * 32),

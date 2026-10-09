@@ -23,6 +23,7 @@ import {
 } from "./math";
 import type { ConfidentialTransferAccount } from "./balance";
 import { ProofKind, SessionBuilder } from "./transaction";
+import { ConfidentialError } from "./errors";
 
 // Complete the U128 range proof after the balance and two transfer limbs.
 const RANGE_PROOF_PADDING_BITS = 16n;
@@ -31,13 +32,23 @@ export function checkRecipient(
   state: ConfidentialTransferAccount,
   requiredCredits = 1n,
 ): void {
-  if (!state.approved) throw new Error("Recipient is not approved");
+  if (!state.approved)
+    throw new ConfidentialError(
+      "RecipientNotApproved",
+      "Recipient is not approved",
+    );
   if (!state.allowConfidentialCredits)
-    throw new Error("Recipient confidential credits disabled");
+    throw new ConfidentialError(
+      "RecipientCreditsDisabled",
+      "Recipient confidential credits disabled",
+    );
   const pendingCredits = state.pendingBalanceCreditCounter + requiredCredits;
   assertU64(pendingCredits);
   if (pendingCredits > state.maximumPendingBalanceCreditCounter)
-    throw new Error("Recipient pending counter is full");
+    throw new ConfidentialError(
+      "RecipientPendingCounterFull",
+      "Recipient pending counter is full",
+    );
 }
 
 /** Generate the same split transfer proof as the Token-2022 Rust client. */
@@ -51,8 +62,15 @@ export async function prepareTransfer(
   auditor?: Uint8Array,
 ) {
   if (amount < 0n || amount > MAX_TRANSFER_AMOUNT)
-    throw new Error("Transfer amount must be in 0..2^48-1");
-  if (amount > balance) throw new Error("Insufficient available balance");
+    throw new ConfidentialError(
+      "TransferAmountTooLarge",
+      "Transfer amount must be in 0..2^48-1",
+    );
+  if (amount > balance)
+    throw new ConfidentialError(
+      "InsufficientAvailable",
+      "Insufficient available balance",
+    );
   checkRecipient(recipient);
   // Free all temporary WASM objects even if proof construction or planning fails.
   const allocations = new Set<{ free(): void }>();

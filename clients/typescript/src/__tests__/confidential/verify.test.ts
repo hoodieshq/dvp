@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import {
-  EscrowKeyMismatchError,
+  ConfidentialError,
   EscrowKeys,
+  readAvailableBalance,
   createSession,
   verifyConfidentialFunding,
 } from "../../confidential";
@@ -27,7 +28,15 @@ test("funding verification reports a foreign key before checking the agreed amou
         foreign,
         f.amount,
       ),
-      EscrowKeyMismatchError,
+      { name: "ConfidentialError", code: "EscrowKeyMismatch" },
+    );
+    // A foreign key is reported directly; history cannot repair it.
+    assert.throws(
+      () => readAvailableBalance(f.state(f.common.dvpAtaB), foreign),
+      (error) =>
+        error instanceof ConfidentialError &&
+        error.code === "EscrowKeyMismatch" &&
+        error.cause === undefined,
     );
     // Correct keys with a different price must still report the amount mismatch.
     await assert.rejects(
@@ -37,7 +46,7 @@ test("funding verification reports a foreign key before checking the agreed amou
         f.keys,
         f.amount + 1n,
       ),
-      { message: "Confidential amount mismatch" },
+      { name: "ConfidentialError", code: "AmountMismatch" },
     );
   } finally {
     foreign.free();

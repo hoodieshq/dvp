@@ -638,10 +638,10 @@ Rust and TypeScript client helpers:
 | --- | --- |
 | Rust `derive_shared_seed(swap, mac)` / TS `deriveSharedSeed(swapDvp, mac)` | shared seed (4.1); takes an HMAC callback so the key stays in a KMS |
 | Rust `EscrowKeys::from_seed`, `encrypt_amount` / TS `EscrowKeys.fromSeed`, `encryptAmount` | escrow keys and amount ciphertexts from the seed (4.2, 4.3) |
-| Rust `verify::decode_swap_dvp_account` | check and decode 458 or 586 bytes into `SwapDvpAccount`; `base()` exposes common fields |
+| Rust `verify::decode_swap_dvp_account` / TS `decodeSwapDvpChecked`, `verifySwapDvp` | check and decode 458 or 586 bytes into `SwapDvpAccount`; `base()` exposes common fields |
 | Rust `verify::verify_confidential_funding` / TS `verifyConfidentialFunding` | pre-funding checks using shared seed and expected amount B (4.4) |
-| escrow balance reader | available and pending balance of escrow B; rebuilt from transaction history when the decryptable balance is wrong |
-| session builders | ordered preparatory and final transactions for Settle and every refund path (`Full`, `Partial`, public balance withdrawal), in v1 or v0 + LUT, with CT hook extras resolved at `u64::MAX` and public-withdrawal extras at the actual public amount; Apply is a single transaction. Sending and retries are the caller's |
+| Rust `read_escrow_balance`, `BalanceHistory` / TS `readEscrowBalance`, `BalanceHistory` | available and pending balance of escrow B; rebuilt from transaction history when the decryptable balance is wrong |
+| Rust `create_session`, `apply_session`, `settle_session`, `refund_session` / TS `createSession`, `applySession`, `settleSession`, `refundSession` | ordered preparatory and final transactions for Settle and every refund path (`Full`, `Partial`, public balance withdrawal), in v1 or v0 + LUT, with CT hook extras resolved at `u64::MAX` and public-withdrawal extras at the actual public amount; Apply is a single transaction. Sending and retries are the caller's |
 
 In TypeScript, `encryptAmount` and the Settle builder need `PedersenOpening.fromBytes` in `@solana/zk-sdk` (4.3).
 
@@ -697,7 +697,7 @@ Transfer hooks:
 Keys:
 
 - Test vectors (4.5) in Rust and TypeScript.
-- A TypeScript-derived seed verifies against a Rust-created swap, and the reverse.
+- A TypeScript-derived seed verifies against a Rust-created swap: `clients/test-vectors/confidential-funding.json` holds a 586-byte swap and its escrow B dump from the Rust suite, and both clients run funding verification on it. The reverse follows from the 4.5 vectors: the same seed yields the same escrow key and ciphertext bytes, and verification compares them byte for byte.
 
 Compatibility:
 

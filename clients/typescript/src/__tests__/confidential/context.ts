@@ -11,6 +11,7 @@ import {
   type Base58EncodedBytes,
   type EncodedAccount,
   type GetAccountInfoApi,
+  type GetLatestBlockhashApi,
   type GetMultipleAccountsApi,
   type GetMinimumBalanceForRentExemptionApi,
   type Rpc,
@@ -101,6 +102,19 @@ export class TestContext extends LiteSVM {
     getMinimumBalanceForRentExemption: (space: bigint) => ({
       send: async () => this.minimumBalanceForRentExemption(space),
     }),
+    // Each example send asks for a blockhash; a fresh one keeps signatures unique.
+    getLatestBlockhash: () => ({
+      send: async () => {
+        this.expireBlockhash();
+        return {
+          context: { slot: this.getClock().slot },
+          value: {
+            blockhash: this.latestBlockhash(),
+            lastValidBlockHeight: 1_000_000n,
+          },
+        };
+      },
+    }),
     getAccountInfo: (key: Address) => ({
       send: async () => {
         const raw = this.account(key);
@@ -120,6 +134,7 @@ export class TestContext extends LiteSVM {
     }),
   } as Rpc<
     GetAccountInfoApi &
+      GetLatestBlockhashApi &
       GetMultipleAccountsApi &
       GetMinimumBalanceForRentExemptionApi
   >;

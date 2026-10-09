@@ -24,8 +24,8 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm build
 ```
 
-Use Node 20.19 or newer (CI uses Node 24) and the repository's pinned pnpm
-10.15.1. Make targets invoke `pnpm` directly;
+Use Node 22.12 or newer (see `engines` in `package.json`) and the repository's pinned
+pnpm 10.15.1. Make targets invoke `pnpm` directly;
 enable Corepack's shim with `corepack enable pnpm` if another version is on PATH.
 
 The pnpm override ensures Token-2022 and DvP use the same SDK instance. When
@@ -65,7 +65,7 @@ Before funding, call `verifyConfidentialFunding(rawSwap, rawEscrow, keys,
 expectedAmount)`. It checks the canonical swap and Token-2022 escrow ATA, mint,
 authority, ElGamal key, approval, confidential credits, agreed amount ciphertexts
 and AE/ElGamal balance agreement. A foreign ElGamal key throws
-`EscrowKeyMismatchError` before the amount comparison. Compare the returned public terms with the
+`ConfidentialError` with code `EscrowKeyMismatch` before the amount comparison. Compare the returned public terms with the
 agreed trade as well. `readEscrowAccount` and `verifyConfidentialSwap` expose
 the individual checks when accounts have already been fetched and verified.
 
@@ -153,8 +153,16 @@ For abandonment, `session.cleanup` contains close instructions. Fetch each
 target account and submit only those that still exist. Record accounts require
 the payer and return rent to the payer; proof contexts require the operation
 authority and return rent to that authority. Successful sessions already close
-their temporary accounts. The cleanup test shows interruption followed by
-cleanup and rebuilding the session.
+their temporary accounts. `cleanupSession` in
+`clients/typescript/examples/confidential/send-session.ts` shows this loop.
+
+Client checks throw `ConfidentialError`; branch on its `code`, which mirrors the
+Rust `ConfidentialError` variants (for example `InsufficientAvailable`,
+`SurplusTooLarge`, `ZeroPartialRefund`, `RecipientNotApproved`,
+`RecipientPendingCounterFull`, `BalanceMismatch`, `IncompleteHistory`). Swap
+decoding keeps `SwapDvpVerificationError`, and proof generation surfaces SDK
+errors unchanged. Snapshots can still change after construction, so these
+checks do not replace final on-chain validation.
 
 ## Hooks and recovery
 
@@ -171,6 +179,8 @@ they fit. For ordinary public transfers, use Token-2022's
 public amount supplied from the token snapshot. `readAvailableBalance` avoids
 decoding unrelated pending funds. AE values are accepted only after checking
 the ElGamal ciphertext; otherwise both readers fall back to verified history.
+If that fallback fails, the thrown error keeps the AE failure as `cause`. A
+foreign key throws `EscrowKeyMismatch` without trying history.
 Funding verification rejects false AE rather than silently repairing it.
 
 Fetch history at the snapshot's commitment through its actual transaction
@@ -216,17 +226,26 @@ read the auditor and build the proof session. It assumes both legs are funded,
 pending credits are applied and there are no transfer hooks. The v0/v1 settlement
 tests execute this example against LiteSVM. `send-session.ts` shows signing and
 sending preparations in order through the integrator's send-and-confirm callback.
-Keep the session for cleanup if sending fails. All example files are typechecked
-by `pnpm test` and excluded from the library build.
+Keep the session for cleanup if sending fails; `cleanupSession` in the same file
+closes the surviving temporary accounts of an abandoned session and is executed
+by the cleanup test.
+
+`clients/typescript/examples/confidential/refunds.ts` prepares Reclaim, Cancel,
+Reject or Recover from one RPC snapshot of the escrow, refund destination and
+mint, with optional balance history and hook extras. The Reclaim and
+Cancel/Recover tests execute it. All example files are typechecked by `pnpm test`
+and excluded from the library build.
 
 `clients/typescript/src/__tests__/confidential/` groups scenarios by instruction and
 covers each lifecycle instruction,
 v0/v1 funding and settlement, auditor and nonzero high limbs, partial/full/None
 refunds, false AE repair from funding history, hooks with memo and interrupted preparation
 cleanup. Wallets use independent random keys. Shared vectors check deterministic keys
-and ciphertexts. `confidential/verify.test.ts` checks foreign keys and an incorrect
-agreed amount before funding; common discovery and RPC-error checks live in
-`clients/typescript/src/__tests__/verify.test.ts`. Broad negative coverage remains
+and ciphertexts, and a Rust-created swap and escrow dump verifies with a
+TypeScript-derived seed. `confidential/verify.test.ts` checks foreign keys and an incorrect
+agreed amount before funding; `confidential/discovery.test.ts` checks that
+discovery skips uninitialized program-owned accounts. Decoding and RPC-error checks
+live in `clients/typescript/src/__tests__/verify.test.ts`. Broad negative coverage remains
 in the Rust suite.
 
 The TypeScript tests build, prove, sign and execute real transactions directly
@@ -235,11 +254,15 @@ through the `litesvm` npm package against the same pinned programs as Rust.
 excluded from the client build and public exports. All tests use `node:test` and
 `node:assert`, run through `tsx`. From the repository root, `pnpm test` typechecks
 the client, examples and tests, then recursively discovers every `*.test.ts`
-under `clients/typescript/src/__tests__/`. Use Node 24 for this command, matching
-CI and its recursive test discovery. Helpers such as `utils.ts` and
+under `clients/typescript/src/__tests__/`. Helpers such as `utils.ts` and
 `context.ts` are not collected as tests. Test files run sequentially to limit
 concurrent proof generation.
 
 After `make build` and `make fetch-test-fixtures`, run `pnpm test` or
 `make typescript-test`. `make integration-test-no-build`, `make all-test` and CI
 include the same complete suite.
+
+`pnpm test:unit` runs only the files that need no program build: the top-level
+`__tests__/*.test.ts` plus `confidential/keys.test.ts` and
+`confidential/transaction.test.ts`, listed explicitly. Add a new fixture-free
+`confidential/` test to that list. The CI JS job runs it after `pnpm build`.

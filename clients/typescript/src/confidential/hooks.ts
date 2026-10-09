@@ -6,6 +6,7 @@ import {
 } from "@solana-program/token-2022";
 import { hookExtras } from "./lifecycle";
 import { U64_MAX } from "./constants";
+import { ConfidentialError } from "./errors";
 
 /** Confidential transfers invoke Execute with the hidden amount sentinel. */
 export async function resolveConfidentialHookAccounts(
@@ -17,8 +18,10 @@ export async function resolveConfidentialHookAccounts(
         { mint: input.mint },
         { programAddress: input.transferHookProgramAddress },
       );
+  // resolveExtraAccountMetasForExecute returns [] for a missing validation account.
   const account = await fetchEncodedAccount(input.rpc, validation);
-  if (!account.exists) throw new Error("Missing hook validation account");
+  if (!account.exists)
+    throw new ConfidentialError("Account", "Missing hook validation account");
   return hookExtras({
     legB: await resolveExtraAccountMetasForExecute({
       ...input,
