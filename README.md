@@ -93,12 +93,12 @@ PDA seeds: `[b"dvp", settlement_authority, user_a, user_b, mint_a, mint_b, nonce
 | # | Name | Signer | Effect |
 | --- | --- | --- | --- |
 | 6 | CreateConfidentialDvp | payer | Creates the swap and configures escrow B for CT. |
-| 7 | ReclaimConfidentialDvp | either party | Reclaims the signer's leg, keeping the swap open. |
-| 8 | SettleConfidentialDvp | settlement authority | Pays the bound amount, refunds available surplus and closes eligible accounts. |
-| 9 | CancelConfidentialDvp | settlement authority | Refunds the selected available B amount and public A, then closes the swap. |
-| 10 | RejectConfidentialDvp | either party | Same refund path as Cancel, authorized by a party. |
-| 11 | RecoverConfidentialDvp | either party | Recovers the signer's leg after the swap has closed. |
-| 12 | ApplyConfidentialDvp | either party | Applies pending B credits before or after close. |
+| 7 | ReclaimConfidentialDvp | `user_a` or `user_b` | Reclaims the signer's leg, keeping the swap open. |
+| 8 | SettleConfidentialDvp | `settlement_authority` | Pays the bound amount, refunds available surplus and closes eligible accounts. |
+| 9 | CancelConfidentialDvp | `settlement_authority` | Refunds the selected available B amount and public A, then closes the swap. |
+| 10 | RejectConfidentialDvp | `user_a` or `user_b` | Same refund path as Cancel, authorized by a party. |
+| 11 | RecoverConfidentialDvp | `user_b` | Recovers leg B after close; leg A uses `RecoverDvp`. |
+| 12 | ApplyConfidentialDvp | `user_a`, `user_b` or `settlement_authority` | Applies pending B credits before or after close. |
 
 Funding remains an ordinary wallet token transfer. Confidential funding requires
 verified swap terms, a configured recipient escrow, and the shared seed. Apply
@@ -225,4 +225,6 @@ tests/integration-tests/   LiteSVM integration tests
 
 An earlier version of the program was audited by [Cantina](https://cantina.xyz/portfolio/fe870bb4-d96d-4902-8aec-9dfcfa2d6a79).
 
-The confidential extension and its client changes require a separate external review; the earlier audit is not evidence of their coverage.
+The confidential extension is built on `main` at
+[`df9919e`](https://github.com/hoodieshq/dvp/commit/df9919ed02c25a93620e7f6820107c9050ce3b92).
+It and its client changes require a separate external review; the earlier audit is not evidence of their coverage.

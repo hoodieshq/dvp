@@ -536,11 +536,12 @@ where
 {
     let validation =
         spl_transfer_hook_interface::get_extra_account_metas_address(mint, hook_program);
-    let Some(validation_data) = fetch(validation)
+    let validation_data = fetch(validation)
         .await
-        .map_err(|e| ConfidentialError::Transaction(e.to_string()))?
-    else {
-        // Validation is optional, but Token-2022 still needs the hook program.
+        .map_err(|e| ConfidentialError::Transaction(e.to_string()))?;
+    // Validation is optional, but Token-2022 still needs the hook program.
+    // Anyone can fund the PDA, so an empty account also means no validation.
+    let Some(validation_data) = validation_data.filter(|data| !data.is_empty()) else {
         return Ok(vec![AccountMeta::new_readonly(*hook_program, false)]);
     };
     let mut ix = Instruction {

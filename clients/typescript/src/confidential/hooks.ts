@@ -22,8 +22,13 @@ export async function resolveConfidentialHookAccounts(
         { programAddress: input.transferHookProgramAddress },
       );
   // Validation is optional, but Token-2022 still needs the hook program account.
+  // Anyone can fund the PDA, so an empty or foreign-owned account means none.
   const account = await fetchEncodedAccount(input.rpc, validation);
-  if (!account.exists)
+  if (
+    !account.exists ||
+    account.data.length === 0 ||
+    account.programAddress !== input.transferHookProgramAddress
+  )
     return [
       { address: input.transferHookProgramAddress, role: AccountRole.READONLY },
     ];

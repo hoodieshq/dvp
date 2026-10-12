@@ -503,6 +503,16 @@ fn refund_with_hook_extras(
 
 #[test]
 fn hook_without_validation_account_settles() {
+    settle_without_validation_list(false);
+}
+
+#[test]
+fn hook_with_prefunded_validation_pda_settles() {
+    // Anyone can fund the PDA, leaving a System-owned account with no data.
+    settle_without_validation_list(true);
+}
+
+fn settle_without_validation_list(prefund: bool) {
     let mut context = TestContext::new();
     let f = ClientFixture::with_hook(&mut context, TransactionFormat::V1, AMOUNT_B, true);
     let hook = Pubkey::new_unique();
@@ -524,6 +534,16 @@ fn hook_without_validation_account_settles() {
     )
     .unwrap();
     send_v1(&mut context, &[update], &[]).unwrap();
+    if prefund {
+        let rent = context.svm.minimum_balance_for_rent_exemption(0);
+        let fund = solana_system_interface::instruction::transfer(
+            &context.payer.pubkey(),
+            &validation,
+            rent,
+        );
+        send_v1(&mut context, &[fund], &[]).unwrap();
+        assert!(context.get_account(&validation).unwrap().data.is_empty());
+    }
     let resolved = futures::executor::block_on(resolve_confidential_hook_accounts(
         &hook,
         &f.dvp.accounts.dvp_ata_b,
@@ -569,5 +589,5 @@ fn hook_without_validation_account_settles() {
     assert_eq!(get_token_balance(&context, &f.asset_recipient), AMOUNT_A);
     assert_eq!(pending(&context, &f.recipient, &f.recipient_keys), AMOUNT_B);
     assert!(context.get_account(&f.dvp.accounts.swap_dvp).is_none());
-    assert!(context.get_account(&validation).is_none());
+    assert_eq!(context.get_account(&validation).is_some(), prefund);
 }

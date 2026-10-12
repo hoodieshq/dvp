@@ -11,6 +11,7 @@ import {
   address,
   type Address,
 } from "@solana/kit";
+import { getTransferSolInstruction } from "@solana-program/system";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
@@ -23,8 +24,9 @@ import {
 import { TestContext, execute, send } from "./context";
 import { createAndFund, fixture } from "./utils";
 
-for (const validationPresent of [true, false]) {
-  test(`resolve confidential hooks and settle with a required recipient memo (validation=${validationPresent})`, async () => {
+// "prefunded" is a System-owned validation PDA with no data, which anyone can create.
+for (const validationState of ["present", "absent", "prefunded"] as const) {
+  test(`resolve confidential hooks and settle with a required recipient memo (validation=${validationState})`, async () => {
     const context = new TestContext(),
       f = await fixture(context, 1, { hook: true });
     try {
@@ -33,7 +35,7 @@ for (const validationPresent of [true, false]) {
         transferHookProgramAddress: address(f.hookProgram) as Address,
         mint: f.common.mintB,
       };
-      if (!validationPresent) {
+      if (validationState !== "present") {
         hook.transferHookProgramAddress = (
           await generateKeyPairSigner()
         ).address;
@@ -60,6 +62,20 @@ for (const validationPresent of [true, false]) {
           { programAddress: hook.transferHookProgramAddress },
         );
         assert.equal(context.account(validation), undefined);
+        if (validationState === "prefunded") {
+          await send(
+            context,
+            f.config,
+            new PlannedTransaction([
+              getTransferSolInstruction({
+                source: f.payer,
+                destination: validation,
+                amount: context.minimumBalanceForRentExemption(0n),
+              }),
+            ]),
+          );
+          assert.equal(context.account(validation)?.data.length, 0);
+        }
       }
       const fundingExtras = await resolveConfidentialHookAccounts({
         ...hook,
@@ -91,7 +107,7 @@ for (const validationPresent of [true, false]) {
         destination: address(f.recipient),
         owner: f.common.swapDvp,
       });
-      if (!validationPresent)
+      if (validationState !== "present")
         assert.deepEqual(extras, [
           {
             address: hook.transferHookProgramAddress,
