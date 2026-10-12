@@ -39,7 +39,10 @@ escrow key first (`EscrowKeyMismatch`), then the amount ciphertexts
 balance agreement. `fetch_swap_dvp_accounts` queries both account sizes, skips
 invalid accounts and still propagates RPC errors.
 With `fetch`, `verify::verify_confidential_funding` combines these checks over the
-two fetched accounts and returns the checked terms and CT state.
+two fetched accounts and returns the checked terms and CT state. It does not
+compare public terms with an off-chain agreement. Before funding or settling,
+compare parties, mints, settlement authority, amount A, destinations, nonce,
+expiry and earliest settlement time with the agreed trade.
 
 ## Transaction sessions
 
@@ -68,7 +71,9 @@ Use the SPL SDK for it; the DvP client does not expose a generic transfer builde
 `TransferSource` contains the CT snapshot, its keys and recovered history events.
 Read the mint's optional auditor with `mint_auditor`. For confidential transfers,
 resolve leg B hook extras with `resolve_confidential_hook_accounts`, which uses
-`u64::MAX` and strips signer flags. A public withdrawal through `None` in Reclaim
+`u64::MAX` and strips signer flags. The validation account is optional: when
+absent, the resolver returns just the readonly, non-signer hook program account.
+Malformed validation data and fetch failures still return errors. A public withdrawal through `None` in Reclaim
 or Recover uses the actual public amount: resolve its ordinary TransferChecked
 extras with that amount. Pass leg A's ordinary hook extras separately. Settle
 with hook extras on either leg returns `HookedSettleRequiresV1` in v0. Hooked
@@ -137,7 +142,12 @@ transfer has a 16-bit low limb and a 32-bit high limb, so decoding individual
 credits works even when the accumulated balance exceeds 32 bits. Public MintTo
 balances remain separate. Apply's supplied AE value is never used during replay.
 
-For proofs stored outside SPL Record, use `BalanceHistory::push_with_proof_accounts`.
+Writes to a pre-existing Record whose initialization is outside the supplied
+history do not block unrelated escrow replay. Its contents remain unknown;
+if a relevant proof needs them, supply historical bytes through the resolver
+or replay returns `IncompleteHistory`.
+
+For proofs stored outside SPL Record or without their initialization, use `BalanceHistory::push_with_proof_accounts`.
 Its callback receives the ZK verify instruction and returns the proof account's
 bytes as they existed at that verification. Ordinary transaction RPC metadata
 does not contain these bytes; the caller must retain them or obtain them from a
@@ -160,6 +170,13 @@ is not evidence that the number is correct. Outgoing builders use
 `read_available_balance` and do not decode unrelated pending credits when AE is
 correct. Apply uses the full balance reader. Funding verification deliberately
 rejects false AE; repair it with a verified Apply before funding.
+
+If both the initial balance read and history recovery fail,
+`read_available_balance` and `read_escrow_balance` return
+`BalanceRecoveryFailed { initial, history }`. Both errors remain inspectable;
+`std::error::Error::source` exposes the initial failure. A foreign key returns
+`EscrowKeyMismatch` immediately. Direct `recover_escrow_balance` calls retain
+their original error variants, including `IncompleteHistory`.
 
 Preflight errors distinguish insufficient available balance, oversized transfer
 or surplus, zero Partial refunds, missing recipient approval, disabled credits
@@ -201,6 +218,7 @@ include them. Client unit tests can run separately with
 The confidential integration tests are grouped by behavior: `create_apply`,
 `settle`, `refunds`, `cleanup`, `balance`, `history` and `hooks`. Balance tests
 cover recovery and spending available funds while large credits remain pending;
-hook tests cover account resolution, extras validation, memos, and actual funding
+hook tests cover optional validation accounts, malformed data and fetch errors,
+extras validation, memos, and actual funding
 and refunds in both formats. The [TypeScript client](typescript-client.md) asserts the same shared vectors
 and exercises integrator flows against the same program fixtures.

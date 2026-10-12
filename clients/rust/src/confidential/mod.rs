@@ -61,6 +61,12 @@ pub enum ConfidentialError {
     BalanceMismatch,
     #[error("transaction history is incomplete or does not match the escrow snapshot")]
     IncompleteHistory,
+    #[error("balance recovery failed: {history}; initial read failed: {initial}")]
+    BalanceRecoveryFailed {
+        #[source]
+        initial: Box<ConfidentialError>,
+        history: Box<ConfidentialError>,
+    },
     #[error("balance arithmetic overflow or underflow")]
     Arithmetic,
     #[error("proof generation failed: {0}")]
