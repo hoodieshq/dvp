@@ -2583,7 +2583,7 @@
           },
           {
             "docs": [
-              "Cash mint; must equal mint_b from the original seeds"
+              "Leg B mint; must equal mint_b from the original seeds"
             ],
             "isSigner": false,
             "isWritable": false,

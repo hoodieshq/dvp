@@ -496,3 +496,26 @@ fn test_confidential_hook_extras_cannot_receive_outer_signer() {
         .get_account(&attacker)
         .is_none_or(|a| a.lamports == 0));
 }
+
+#[test]
+fn send_v1_rejects_oversized_transactions_without_execution() {
+    let mut context = crate::utils::TestContext::new();
+    let payer = context.payer.pubkey();
+    let before = context.get_account(&payer);
+    let ix = solana_instruction::Instruction {
+        program_id: MEMO_PROGRAM_ID,
+        accounts: vec![],
+        data: vec![b'a'; solana_message::v1::MAX_TRANSACTION_SIZE],
+    };
+    let failure = send_v1(&mut context, &[ix], &[]).unwrap_err();
+    assert_eq!(
+        failure.err,
+        solana_transaction::TransactionError::SanitizeFailure
+    );
+    assert!(failure.meta.logs[0].contains(&format!(
+        "exceeds v1 limit {}",
+        solana_message::v1::MAX_TRANSACTION_SIZE
+    )));
+    assert_eq!(failure.meta.compute_units_consumed, 0);
+    assert_eq!(context.get_account(&payer), before);
+}

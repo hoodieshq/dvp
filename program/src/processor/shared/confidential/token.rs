@@ -4,10 +4,10 @@ use pinocchio::{account::AccountView, error::ProgramError, ProgramResult};
 use pinocchio_token_2022::ID as TOKEN_2022_PROGRAM_ID;
 use spl_token_2022::{
     extension::{
-        confidential_transfer::ConfidentialTransferAccount, BaseStateWithExtensions, ExtensionType,
-        StateWithExtensions,
+        confidential_transfer::{ConfidentialTransferAccount, ConfidentialTransferMint},
+        BaseStateWithExtensions, ExtensionType, StateWithExtensions,
     },
-    state::Account,
+    state::{Account, Mint},
 };
 
 use crate::{error::DvpSwapProgramError, require};
@@ -69,4 +69,20 @@ pub fn check_confidential_recipient(account: &AccountView) -> ProgramResult {
 #[inline(always)]
 pub fn has_confidential_transfer_account(info: &AccountView) -> Result<bool, ProgramError> {
     Ok(confidential_account(info)?.is_some())
+}
+
+/// Confidential leg B requires Token-2022 and the mint's CT configuration.
+#[inline(always)]
+pub fn verify_confidential_mint(mint: &AccountView) -> ProgramResult {
+    require!(
+        mint.owned_by(&TOKEN_2022_PROGRAM_ID),
+        DvpSwapProgramError::MintNotConfidential
+    );
+    let data = mint.try_borrow()?;
+    let state =
+        StateWithExtensions::<Mint>::unpack(&data).map_err(|_| ProgramError::InvalidAccountData)?;
+    state
+        .get_extension::<ConfidentialTransferMint>()
+        .map_err(|_| DvpSwapProgramError::MintNotConfidential)?;
+    Ok(())
 }
