@@ -112,8 +112,9 @@ export const DEFAULT_CONTEXT_SIZES: readonly number[] = Object.freeze([
 /**
  * Rent-exempt minimum with the default rent parameters:
  * (128 account-storage overhead + space) * 3480 lamports/byte-year * 2 years.
- * Matches `getMinimumBalanceForRentExemption` on devnet/mainnet today; the
- * server should still prefer values fetched from RPC.
+ * Devnet does not match it: on 2026-10-12 devnet charged 5080 lamports per
+ * byte (128 + space), so callers must pass values fetched from
+ * `getMinimumBalanceForRentExemption`; the server does.
  */
 export function defaultRentExemptMinimum(space: number): bigint {
   return (128n + BigInt(space)) * 3480n * 2n;
