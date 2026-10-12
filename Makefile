@@ -5,7 +5,7 @@ SHELL := /usr/bin/env bash
 # Pin the SBF compiler used by Agave 4.2.2's cargo-build-sbf 4.1.0.
 PLATFORM_TOOLS_VERSION := v1.54
 
-.PHONY: install build build-sbf build-hook-fixture build-smart-wallet-fixture fmt generate-idl generate-clients
+.PHONY: install build build-sbf build-hook-fixture build-smart-wallet-fixture build-confidential-fixture fmt generate-idl generate-clients
 .PHONY: unit-test integration-test integration-test-no-build all-test
 .PHONY: unit-coverage coverage-html all-coverage verify-program-id
 .PHONY: fetch-test-fixtures check-test-fixtures
@@ -31,6 +31,7 @@ build:
 	$(MAKE) build-sbf
 	$(MAKE) build-hook-fixture
 	$(MAKE) build-smart-wallet-fixture
+	$(MAKE) build-confidential-fixture
 
 # CI receives generated clients from the generation job before this step.
 build-sbf:
@@ -63,6 +64,10 @@ build-hook-fixture:
 # workspace target/deploy/ alongside the swap program's .so.
 build-smart-wallet-fixture:
 	cd tests/smart-wallet-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
+
+# Test-only PDA driver for the shared confidential transfer helpers.
+build-confidential-fixture:
+	cd tests/confidential-transfer-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
 
 # Generate the Codama IDL from the program's annotations.
 generate-idl:

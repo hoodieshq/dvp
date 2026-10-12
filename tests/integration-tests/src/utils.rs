@@ -701,6 +701,39 @@ pub fn set_token_2022_with_memo_required(
     write_account(context, ata, data, TOKEN_2022_PROGRAM_ID, 2_039_280);
 }
 
+/// Writes the hook fixture's extra-account list without changing the mint.
+/// Returns the validation PDA to append to the transfer's extra accounts.
+pub fn set_hook_extra_account_metas(
+    context: &mut TestContext,
+    mint: &Pubkey,
+    extras: &[AccountMeta],
+) -> Pubkey {
+    use spl_tlv_account_resolution::{account::ExtraAccountMeta, state::ExtraAccountMetaList};
+    use spl_transfer_hook_interface::{
+        get_extra_account_metas_address, instruction::ExecuteInstruction,
+    };
+
+    let validation_pda = get_extra_account_metas_address(mint, &HOOK_FIXTURE_PROGRAM_ID);
+    let metas: Vec<_> = extras
+        .iter()
+        .map(|meta| {
+            ExtraAccountMeta::new_with_pubkey(&meta.pubkey, meta.is_signer, meta.is_writable)
+                .unwrap()
+        })
+        .collect();
+    let mut data = vec![0; ExtraAccountMetaList::size_of(metas.len()).unwrap()];
+    ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &metas).unwrap();
+    let lamports = context.svm.minimum_balance_for_rent_exemption(data.len());
+    write_account(
+        context,
+        &validation_pda,
+        data,
+        HOOK_FIXTURE_PROGRAM_ID,
+        lamports,
+    );
+    validation_pda
+}
+
 /// Sets up a Token-2022 mint that delegates to the test hook fixture
 /// (`HOOK_FIXTURE_PROGRAM_ID`) and creates its `ExtraAccountMetaList`
 /// validation PDA declaring **one** extra account: the system program.
@@ -712,11 +745,6 @@ pub fn set_token_2022_with_memo_required(
 /// trailing accounts the client must pass to Settle/Cancel/Reject/Reclaim
 /// for this mint.
 pub fn setup_hook_mint(context: &mut TestContext, mint: &Pubkey) {
-    use spl_tlv_account_resolution::{account::ExtraAccountMeta, state::ExtraAccountMetaList};
-    use spl_transfer_hook_interface::{
-        get_extra_account_metas_address, instruction::ExecuteInstruction,
-    };
-
     set_mint_2022_with_transfer_hook(
         context,
         mint,
@@ -724,21 +752,13 @@ pub fn setup_hook_mint(context: &mut TestContext, mint: &Pubkey) {
         &context.payer.pubkey(),
     );
 
-    let validation_pda = get_extra_account_metas_address(mint, &HOOK_FIXTURE_PROGRAM_ID);
-    let extras =
-        vec![
-            ExtraAccountMeta::new_with_pubkey(&solana_sdk_ids::system_program::ID, false, false)
-                .unwrap(),
-        ];
-    let size = ExtraAccountMetaList::size_of(extras.len()).unwrap();
-    let mut data = vec![0u8; size];
-    ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &extras).unwrap();
-    write_account(
+    set_hook_extra_account_metas(
         context,
-        &validation_pda,
-        data,
-        HOOK_FIXTURE_PROGRAM_ID,
-        1_000_000_000,
+        mint,
+        &[AccountMeta::new_readonly(
+            solana_sdk_ids::system_program::ID,
+            false,
+        )],
     );
 }
 
@@ -771,11 +791,6 @@ pub fn setup_malicious_hook_mint(
     victim: &Pubkey,
     attacker: &Pubkey,
 ) {
-    use spl_tlv_account_resolution::{account::ExtraAccountMeta, state::ExtraAccountMetaList};
-    use spl_transfer_hook_interface::{
-        get_extra_account_metas_address, instruction::ExecuteInstruction,
-    };
-
     set_mint_2022_with_transfer_hook(
         context,
         mint,
@@ -783,25 +798,17 @@ pub fn setup_malicious_hook_mint(
         &context.payer.pubkey(),
     );
 
-    let validation_pda = get_extra_account_metas_address(mint, &HOOK_FIXTURE_PROGRAM_ID);
-    // victim: signer + writable (a System transfer's source needs both) —
+    // victim: signer + writable (a System transfer's source needs both) -
     // the signer bit is what the swap program strips. attacker: writable sink.
     // system program: so the hook can CPI it to move the drained lamports.
-    let extras = vec![
-        ExtraAccountMeta::new_with_pubkey(victim, true, true).unwrap(),
-        ExtraAccountMeta::new_with_pubkey(attacker, false, true).unwrap(),
-        ExtraAccountMeta::new_with_pubkey(&solana_sdk_ids::system_program::ID, false, false)
-            .unwrap(),
-    ];
-    let size = ExtraAccountMetaList::size_of(extras.len()).unwrap();
-    let mut data = vec![0u8; size];
-    ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &extras).unwrap();
-    write_account(
+    set_hook_extra_account_metas(
         context,
-        &validation_pda,
-        data,
-        HOOK_FIXTURE_PROGRAM_ID,
-        1_000_000_000,
+        mint,
+        &[
+            AccountMeta::new(*victim, true),
+            AccountMeta::new(*attacker, false),
+            AccountMeta::new_readonly(solana_sdk_ids::system_program::ID, false),
+        ],
     );
 }
 

@@ -1,9 +1,10 @@
 use crate::{
     error::DvpSwapProgramError,
     processor::shared::account_check::{verify_account_owner, verify_signer, verify_token_program},
+    processor::shared::confidential::has_confidential_transfer_account,
     processor::shared::token_utils::{
-        get_mint_decimals, get_token_account_balance, has_confidential_transfer_account,
-        transfer_checked_cpi, verify_ata_recipient_if_initialized, verify_canonical_ata,
+        get_mint_decimals, get_token_account_balance, transfer_checked_cpi,
+        verify_ata_recipient_if_initialized, verify_canonical_ata,
     },
     require, require_len,
     state::swap_dvp::{NONCE_TOMBSTONE_SEED, SWAP_DVP_SEED},
