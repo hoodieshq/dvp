@@ -1,0 +1,6 @@
+# Prototype secrets (treasury keypair)
+.secrets/
+
+# SvelteKit build output
+.svelte-kit/
+build/
