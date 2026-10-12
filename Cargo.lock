@@ -7514,6 +7514,7 @@ dependencies = [
  "borsh 1.8.1",
  "dvp-swap-program-client",
  "litesvm",
+ "serde_json",
  "sha2 0.10.9",
  "solana-account 4.3.2",
  "solana-clock 3.1.1",

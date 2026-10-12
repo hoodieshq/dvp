@@ -18,7 +18,17 @@ fn generate_idl() -> Result<(), Box<dyn std::error::Error>> {
     let codama = Codama::load(crate_path)?;
     let idl_json = codama.get_json_idl()?;
 
-    let parsed: serde_json::Value = serde_json::from_str(&idl_json)?;
+    let mut parsed: serde_json::Value = serde_json::from_str(&idl_json)?;
+    // Codama 0.7 applies #[codama(name)] to definitions, but type links still
+    // use the Rust identifier. Keep refund arguments linked to the renamed type.
+    for instruction in parsed["program"]["instructions"].as_array_mut().unwrap() {
+        for argument in instruction["arguments"].as_array_mut().unwrap() {
+            let ty = &mut argument["type"];
+            if ty["kind"] == "definedTypeLinkNode" && ty["name"] == "legBrefund" {
+                ty["name"] = "legBRefund".into();
+            }
+        }
+    }
     let mut formatted_json = serde_json::to_string_pretty(&parsed)?;
     formatted_json.push('\n');
 
