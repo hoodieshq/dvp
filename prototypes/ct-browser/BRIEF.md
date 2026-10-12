@@ -119,6 +119,30 @@ would not build. Start from the demo's `assertRelayable` and extend:
   the treasury, over-funded `CreateAccount`, Token-2022 `MintTo` signed by the
   treasury, treasury as authority in a CT instruction. All must be refused.
 
+## Parallel work
+
+Run in parallel only what neither touches devnet nor edits the same files.
+
+- Main session: scaffold the app (Bun, kit 8, WASM), the server endpoints, then
+  the devnet cycle. Devnet steps stay strictly sequential: each depends on chain
+  state left by the previous one.
+- Subagent 1 (same checkout, writes only
+  `prototypes/ct-browser/src/lib/server/relayPolicy.ts` and its test): the relay
+  policy and the negative checks as a pure module over decoded v1 messages. No
+  network. It may use the repo-root dependencies (kit 8.4 is installed there)
+  until the app's own `package.json` exists. Do not use worktree isolation: a
+  fresh worktree branches from `origin/main`, which has neither the CT client nor
+  this brief. The main session wires the module into `/api/relay` after its tests
+  pass.
+- Subagent 2 (read-only, Explore): extract from
+  `clients/typescript/src/__tests__/confidential/utils.ts` and the Token-2022 CT
+  helpers the exact wallet-side sequence (configure, deposit, apply, CT transfer)
+  and every proof-context size and owner the relay must allow. Returns a short
+  note, no code edits; its context sizes feed subagent 1.
+
+Start both subagents right after reading this brief; the main session scaffolds
+meanwhile.
+
 ## Secrets and environment
 
 - Treasury: generate a new keypair into `prototypes/ct-browser/.secrets/`
