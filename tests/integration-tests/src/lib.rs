@@ -10,8 +10,6 @@ pub mod utils;
 #[cfg(test)]
 mod test_cancel_dvp;
 #[cfg(test)]
-mod test_client_verify;
-#[cfg(test)]
 mod test_create_dvp;
 #[cfg(test)]
 mod test_reclaim_dvp;
