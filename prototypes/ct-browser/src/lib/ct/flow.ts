@@ -61,7 +61,7 @@ import {
 	type TransactionSession
 } from '$dvp/confidential';
 import { AMOUNT_A, AMOUNT_B, DECIMALS, PROGRAM_ID, START_B } from '$lib/config';
-import { fromHex, save, type StepLog, type Stored } from './state';
+import { fromHex, hex, save, type StepLog, type Stored } from './state';
 
 const MEMO = address('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 const INSTRUCTIONS_SYSVAR = address('Sysvar1nstructions1111111111111111111111111');
@@ -94,12 +94,26 @@ export async function context(stored: Stored) {
 	return { rpc, stored, treasury, authority, partyA, partyB, config };
 }
 
-/** Standard wallet-level CT keys, derived from the role's Ed25519 signature. */
-async function walletKeys(signer: KeyPairSigner): Promise<WalletKeys> {
-	const derived = await deriveConfidentialKeys({ signer });
-	const secret = ElGamalSecretKey.fromBytes(derived.elgamalKeypair.secretKey);
+/**
+ * Standard wallet-level CT keys, derived from the role's Ed25519 signature once
+ * and then stored. Safari's WebCrypto Ed25519 signs non-deterministically, so a
+ * second derivation would return different keys than the ones the account was
+ * configured with.
+ */
+async function walletKeys(ctx: Ctx, signer: KeyPairSigner): Promise<WalletKeys> {
+	const keys = (ctx.stored.ctKeys ??= {});
+	if (!keys[signer.address]) {
+		const derived = await deriveConfidentialKeys({ signer });
+		keys[signer.address] = {
+			elgamalSecret: hex(derived.elgamalKeypair.secretKey),
+			ae: hex(derived.aeKey)
+		};
+		save(ctx.stored);
+	}
+	const { elgamalSecret, ae } = keys[signer.address];
+	const secret = ElGamalSecretKey.fromBytes(fromHex(elgamalSecret));
 	try {
-		return { elgamal: ElGamalKeypair.fromSecretKey(secret), ae: AeKey.fromBytes(derived.aeKey) };
+		return { elgamal: ElGamalKeypair.fromSecretKey(secret), ae: AeKey.fromBytes(fromHex(ae)) };
 	} finally {
 		secret.free();
 	}
@@ -249,7 +263,7 @@ export async function stepSetup(ctx: Ctx, log: StepLog): Promise<void> {
 /** Reallocate + ConfigureAccount (+ inline VerifyPubkeyValidity) on a party's mint B ATA. */
 async function configureCtAccount(ctx: Ctx, owner: KeyPairSigner, token: Address, log: StepLog) {
 	const { mintB } = await addresses(ctx);
-	const keys = await walletKeys(owner);
+	const keys = await walletKeys(ctx, owner);
 	try {
 		const plan = await timed(log, () =>
 			getCreateConfidentialTransferAccountInstructionPlan({
@@ -298,7 +312,7 @@ export async function stepCtAccounts(ctx: Ctx, log: StepLog): Promise<void> {
 
 async function applyPending(ctx: Ctx, owner: KeyPairSigner, token: Address, log: StepLog) {
 	const account = await fetchToken(ctx.rpc, token, { commitment: 'confirmed' });
-	const keys = await walletKeys(owner);
+	const keys = await walletKeys(ctx, owner);
 	const secret = keys.elgamal.secret();
 	try {
 		const ix = await timed(log, () =>
@@ -374,7 +388,7 @@ export async function stepFundA(ctx: Ctx, log: StepLog): Promise<void> {
 export async function stepFundB(ctx: Ctx, log: StepLog): Promise<void> {
 	const a = await addresses(ctx);
 	const keys = escrowKeys(ctx);
-	const wallet = await walletKeys(ctx.partyB);
+	const wallet = await walletKeys(ctx, ctx.partyB);
 	try {
 		const snapshots = await fetchEncodedAccounts(ctx.rpc, [a.swapDvp, a.dvpAtaB], {
 			commitment: 'confirmed'
@@ -490,7 +504,7 @@ export async function stepCheck(ctx: Ctx, log: StepLog): Promise<void> {
 	const a = await addresses(ctx);
 	await applyPending(ctx, ctx.partyA, a.aMintB, log);
 	const account = await fetchToken(ctx.rpc, a.aMintB, { commitment: 'confirmed' });
-	const keys = await walletKeys(ctx.partyA);
+	const keys = await walletKeys(ctx, ctx.partyA);
 	const secret = keys.elgamal.secret();
 	try {
 		const balance = decryptConfidentialTransferBalance({

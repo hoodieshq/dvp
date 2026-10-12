@@ -11,9 +11,11 @@ export type Stored = {
 	nonce: string;
 	mintA?: string;
 	mintB?: string;
+	/** CT wallet keys per role address (hex), derived once and kept. */
+	ctKeys?: Record<string, { elgamalSecret: string; ae: string }>;
 };
 
-const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+export const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 export const fromHex = (s: string) => Uint8Array.from(s.match(/../g)!.map((b) => parseInt(b, 16)));
 const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 
