@@ -202,5 +202,5 @@ The confidential integration tests are grouped by behavior: `create_apply`,
 `settle`, `refunds`, `cleanup`, `balance`, `history` and `hooks`. Balance tests
 cover recovery and spending available funds while large credits remain pending;
 hook tests cover account resolution, extras validation, memos, and actual funding
-and refunds in both formats. The TypeScript confidential client and its shared
-vector checks remain planned.
+and refunds in both formats. The [TypeScript client](typescript-client.md) asserts the same shared vectors
+and exercises integrator flows against the same program fixtures.

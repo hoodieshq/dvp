@@ -1,6 +1,114 @@
+use crate::confidential_utils::ConfidentialDvpFixture;
 use crate::state_utils::AMOUNT_B;
-use crate::utils::{ClientFixture, TestContext};
+use crate::utils::{execute, ClientFixture, TestContext};
 use dvp_swap_program_client::{confidential::*, verify::verify_confidential_funding};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+use solana_account::Account;
+use solana_pubkey::Pubkey;
+use solana_signer::Signer;
+
+/// Rust-created swap and escrow B, verified before funding by both clients.
+const FUNDING_VECTOR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../test-vectors/confidential-funding.json"
+);
+const FUNDING_MASTER_KEY: [u8; 32] = [0x5a; 32];
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+fn funding_keys(master: &[u8], swap: &Pubkey) -> EscrowKeys {
+    let seed = derive_shared_seed(swap, |message| -> Result<[u8; 32], ()> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(master).unwrap();
+        mac.update(message);
+        Ok(mac.finalize().into_bytes().into())
+    })
+    .unwrap();
+    EscrowKeys::from_seed(&seed).unwrap()
+}
+
+fn account_json(address: &Pubkey, account: &Account) -> serde_json::Value {
+    serde_json::json!({
+        "address": address.to_string(),
+        "owner": account.owner.to_string(),
+        "lamports": account.lamports.to_string(),
+        "data": hex(&account.data),
+    })
+}
+
+fn account_from_json(value: &serde_json::Value) -> (Pubkey, Account) {
+    let address = value["address"].as_str().unwrap().parse().unwrap();
+    let account = Account {
+        lamports: value["lamports"].as_str().unwrap().parse().unwrap(),
+        data: unhex(value["data"].as_str().unwrap()),
+        owner: value["owner"].as_str().unwrap().parse().unwrap(),
+        executable: false,
+        rent_epoch: 0,
+    };
+    (address, account)
+}
+
+/// Regenerate with `cargo test -p dvp-swap-program-client --all-features --test integration
+/// write_confidential_funding_vector -- --ignored`, then run both client suites.
+#[test]
+#[ignore]
+fn write_confidential_funding_vector() {
+    let mut context = TestContext::new();
+    let f = ConfidentialDvpFixture::new(&mut context, true, false);
+    let keys = funding_keys(&FUNDING_MASTER_KEY, &f.accounts.swap_dvp);
+    let config = SessionConfig::new(
+        context.payer.pubkey(),
+        TransactionFormat::V1,
+        context.svm.get_sysvar(),
+    );
+    let create = create_session(&config, &f.accounts, f.args.clone(), &keys, AMOUNT_B).unwrap();
+    execute(&mut context, &config, create, &[]);
+    let swap = context.get_account(&f.accounts.swap_dvp).unwrap();
+    let escrow = context.get_account(&f.accounts.dvp_ata_b).unwrap();
+    std::fs::write(
+        FUNDING_VECTOR,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "master_key": hex(&FUNDING_MASTER_KEY),
+            "amount_b": AMOUNT_B.to_string(),
+            "swap": account_json(&f.accounts.swap_dvp, &swap),
+            "escrow_b": account_json(&f.accounts.dvp_ata_b, &escrow),
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn rust_created_funding_vector_verifies() {
+    let vector: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(FUNDING_VECTOR).unwrap()).unwrap();
+    let (swap_address, swap) = account_from_json(&vector["swap"]);
+    let (escrow_address, escrow) = account_from_json(&vector["escrow_b"]);
+    let amount_b = vector["amount_b"].as_str().unwrap().parse().unwrap();
+    let keys = funding_keys(
+        &unhex(vector["master_key"].as_str().unwrap()),
+        &swap_address,
+    );
+    verify_confidential_funding(
+        &swap_address,
+        &swap,
+        &escrow_address,
+        &escrow,
+        &keys,
+        amount_b,
+    )
+    .unwrap();
+}
 
 #[test]
 fn client_create_apply_and_verify_in_both_formats() {

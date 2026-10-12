@@ -1,6 +1,6 @@
 # DvP Confidential Transfer: Program Specification
 
-**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers, all confidential on-chain lifecycle instructions and the Rust confidential client. The TypeScript confidential client remains a later stage.
+**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers, all confidential on-chain lifecycle instructions and the Rust and TypeScript confidential clients.
 
 **Source baseline.** Program sources at `solana-foundation/dvp` main `dfd47bf`, including the deployed program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
 
@@ -88,16 +88,16 @@ let (escrow_elgamal, escrow_ae) =
     derivation::derive_confidential_keys_from_ikm(&shared_seed)?;
 ```
 
-TypeScript: [`@solana/zk-sdk`](https://www.npmjs.com/package/@solana/zk-sdk) >= 0.5.3 ([GitHub](https://github.com/solana-program/zk-elgamal-proof/tree/main/zk-sdk-wasm-js)).
+TypeScript: [`@solana/zk-sdk`](https://www.npmjs.com/package/@solana/zk-sdk) >= 0.5.4 ([GitHub](https://github.com/solana-program/zk-elgamal-proof/tree/main/zk-sdk-wasm-js)).
 
 ```ts
 const escrowElgamal = ElGamalKeypair.fromSeed(sharedSeed);
 const escrowAe = AeKey.fromSeed(sharedSeed);
 ```
 
-`ConfidentialKeys.fromIkm(sharedSeed)` in 0.5.3 returns both keys in one call, like the Rust function.
+`ConfidentialKeys.fromIkm(sharedSeed)` returns both keys in one call, like the Rust function.
 
-Both run the same HKDF-SHA512 chain, so the keys are identical in Rust and TypeScript (`@solana/zk-sdk` 0.5.3 wraps `solana-zk-sdk` 8.0.1); the test vectors (4.5) check it.
+Both run the same HKDF-SHA512 chain, so the keys are identical in Rust and TypeScript (`@solana/zk-sdk` 0.5.4 wraps `solana-zk-sdk` 8.1.0); the test vectors (4.5) check it.
 
 ### 4.3 Amount ciphertexts
 
@@ -126,7 +126,7 @@ let enc_hi = pk.encrypt_with(hi, &opening(b"opening-hi"));
 
 Each ciphertext is stored as a 64-byte `PodElGamalCiphertext`. They depend only on `(shared_seed, amount_b)`, so any party recomputes them to verify a swap (4.4) and rebuilds the Settle equality proofs from the seed alone.
 
-TypeScript: `@solana/zk-sdk` 0.5.3 has no `PedersenOpening.fromBytes`, which these ciphertexts and the Settle equality proofs need; it is added upstream in `zk-sdk-wasm-js` as [PR #572](https://github.com/solana-program/zk-elgamal-proof/pull/572).
+TypeScript: these ciphertexts and the Settle equality proofs need `PedersenOpening.fromBytes`, available in `@solana/zk-sdk` 0.5.4 and later.
 
 ### 4.4 Verification before funding
 
@@ -134,8 +134,9 @@ Before funding, the Rust client uses `verify::verify_confidential_funding` with
 the fetched swap/escrow accounts, keys derived from the shared seed and expected amount B. The lower-level
 `verify_confidential_swap` accepts checked account state and derived keys.
 `verify::decode_swap_dvp_account` only checks the swap owner, layout and PDA and
-returns `SwapDvpAccount`; it does not perform the funding checks below. The planned
-TypeScript `verifySwapDvp` counterpart must enforce the same checks:
+returns `SwapDvpAccount`; it does not perform the funding checks below.
+TypeScript `verifyConfidentialFunding` enforces the same checks; `verifySwapDvp`
+checks only the swap owner, layout and PDA:
 
 1. The escrow ATA's `ConfidentialTransferAccount.elgamal_pubkey` equals `escrow_elgamal.pubkey`.
 2. The escrow ATA's `ConfidentialTransferAccount.approved` and `allow_confidential_credits` are both `true`.
@@ -145,7 +146,7 @@ TypeScript `verifySwapDvp` counterpart must enforce the same checks:
 
 ### 4.5 Test vectors
 
-The clients ship a vectors file (`clients/test-vectors/confidential-amount-b.json`) with at least: `seed_master_key + swap_dvp → shared_seed`; `shared_seed → elgamal pubkey, elgamal secret, ae key, opening_lo, opening_hi`; `(shared_seed, amount_b) → Enc(lo), Enc(hi)` for `amount_b ∈ {1, 2^16 − 1, 2^16, 2^48 − 1}`. Rust tests assert them; TypeScript checks remain planned.
+The clients ship a vectors file (`clients/test-vectors/confidential-amount-b.json`) with at least: `seed_master_key + swap_dvp → shared_seed`; `shared_seed → elgamal pubkey, elgamal secret, ae key, opening_lo, opening_hi`; `(shared_seed, amount_b) → Enc(lo), Enc(hi)` for `amount_b ∈ {1, 2^16 − 1, 2^16, 2^48 − 1}`. Rust and TypeScript tests assert them.
 
 ### 4.6 Seed loss
 
@@ -631,23 +632,23 @@ Requirements:
 - v1: send transactions in base64 (base58 cannot carry a full-size v1 transaction) and read them with `maxSupportedTransactionVersion >= 1` in `getTransaction` / `getBlock`.
 - v0: set compute and loaded-account limits explicitly through compute-budget instructions. Rust sessions default to 400k CU and 4 MB, with preparation packing bounded by estimated proof cost and wire size.
 
-Rust client helpers; TypeScript counterparts remain planned:
+Rust and TypeScript client helpers:
 
 | Helper | What it does |
 | --- | --- |
-| Rust `derive_shared_seed(swap, mac)` / planned TS `deriveSharedSeed(seedMasterKeyMac, swapDvp)` | shared seed (4.1); takes an HMAC callback so the key stays in a KMS |
-| Rust `EscrowKeys::from_seed`, `encrypt_amount` / planned TS `encryptAmountB` | escrow keys and amount ciphertexts from the seed (4.2, 4.3) |
-| Rust `verify::decode_swap_dvp_account` | check and decode 458 or 586 bytes into `SwapDvpAccount`; `base()` exposes common fields |
-| Rust `verify::verify_confidential_funding` / planned TS `verifySwapDvp` | pre-funding checks using shared seed and expected amount B (4.4) |
-| escrow balance reader | available and pending balance of escrow B; rebuilt from transaction history when the decryptable balance is wrong |
-| session builders | ordered preparatory and final transactions for Settle and every refund path (`Full`, `Partial`, public balance withdrawal), in v1 or v0 + LUT, with CT hook extras resolved at `u64::MAX` and public-withdrawal extras at the actual public amount; Apply is a single transaction. Sending and retries are the caller's |
+| Rust `derive_shared_seed(swap, mac)` / TS `deriveSharedSeed(swapDvp, mac)` | shared seed (4.1); takes an HMAC callback so the key stays in a KMS |
+| Rust `EscrowKeys::from_seed`, `encrypt_amount` / TS `EscrowKeys.fromSeed`, `encryptAmount` | escrow keys and amount ciphertexts from the seed (4.2, 4.3) |
+| Rust `verify::decode_swap_dvp_account` / TS `decodeSwapDvpChecked`, `verifySwapDvp` | check and decode 458 or 586 bytes into `SwapDvpAccount`; `base()` exposes common fields |
+| Rust `verify::verify_confidential_funding` / TS `verifyConfidentialFunding` | pre-funding checks using shared seed and expected amount B (4.4) |
+| Rust `read_escrow_balance`, `BalanceHistory` / TS `readEscrowBalance`, `BalanceHistory` | available and pending balance of escrow B; rebuilt from transaction history when the decryptable balance is wrong |
+| Rust `create_session`, `apply_session`, `settle_session`, `refund_session` / TS `createSession`, `applySession`, `settleSession`, `refundSession` | ordered preparatory and final transactions for Settle and every refund path (`Full`, `Partial`, public balance withdrawal), in v1 or v0 + LUT, with CT hook extras resolved at `u64::MAX` and public-withdrawal extras at the actual public amount; Apply is a single transaction. Sending and retries are the caller's |
 
-In TypeScript, `encryptAmountB` and the Settle builder need `PedersenOpening.fromBytes` in `@solana/zk-sdk` (4.3).
+In TypeScript, `encryptAmount` and the Settle builder need `PedersenOpening.fromBytes` from `@solana/zk-sdk` 0.5.4 or later (4.3).
 
 Dependencies:
 
 - Rust: `solana-zk-sdk` 7.0.1 (8.x once `spl-token-confidential-transfer-proof-generation` supports it), `spl-token-confidential-transfer-proof-generation` 0.6.1, `spl-record`.
-- TypeScript: `@solana/zk-sdk` >= 0.5.3 with `PedersenOpening.fromBytes`, `@solana-program/token-2022`, `@solana-program/zk-elgamal-proof`; SPL Record instructions by hand if no package exists.
+- TypeScript: `@solana/zk-sdk` >= 0.5.4, `@solana-program/token-2022`, `@solana-program/zk-elgamal-proof`, `@solana-program/record` and `@solana/kit` 8.x for v1 messages.
 
 ## 13. Tests
 
@@ -696,7 +697,7 @@ Transfer hooks:
 Keys:
 
 - Test vectors (4.5) in Rust and TypeScript.
-- A TypeScript-derived seed verifies against a Rust-created swap, and the reverse.
+- A TypeScript-derived seed verifies against a Rust-created swap: `clients/test-vectors/confidential-funding.json` holds a 586-byte swap and its escrow B dump from the Rust suite, and both clients run funding verification on it. The reverse follows from the 4.5 vectors: the same seed yields the same escrow key and ciphertext bytes, and verification compares them byte for byte.
 
 Compatibility:
 
