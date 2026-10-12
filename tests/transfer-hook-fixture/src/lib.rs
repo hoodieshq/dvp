@@ -32,9 +32,25 @@ const DRAIN_LAMPORTS: u64 = 100_000_000;
 pub fn process_instruction(
     _program_id: &Address,
     accounts: &[AccountView],
-    _instruction_data: &[u8],
+    instruction_data: &[u8],
 ) -> ProgramResult {
     log!("hook accounts: {}", accounts.len());
+    // Execute encodes its amount after the eight-byte discriminator. CT must
+    // supply u64::MAX, and hook extras must retain writable but lose signer.
+    const EXECUTE_DISCRIMINATOR_LEN: usize = 8;
+    if let Some(amount) = instruction_data
+        .get(EXECUTE_DISCRIMINATOR_LEN..)
+        .and_then(|data| <[u8; 8]>::try_from(data).ok())
+    {
+        log!("hook amount: {}", u64::from_le_bytes(amount));
+    }
+    if let Some(extra) = accounts.get(5) {
+        log!(
+            "hook first extra writable: {}, signer: {}",
+            extra.is_writable() as u8,
+            extra.is_signer() as u8
+        );
+    }
 
     // Execute layout: [source, mint, destination, authority, validation_pda,
     // ...extras]. With two or more extras, treat extra[0] as a victim to

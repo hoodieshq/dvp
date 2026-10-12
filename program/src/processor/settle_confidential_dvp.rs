@@ -1,6 +1,7 @@
 use crate::{
-    processor::shared::confidential::{check_confidential_swap, check_transfer_contexts},
-    processor::shared::confidential_types::CtTransferData,
+    processor::shared::confidential::{
+        check_confidential_swap, check_transfer_contexts, CtTransferData,
+    },
     require, require_len,
 };
 use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};

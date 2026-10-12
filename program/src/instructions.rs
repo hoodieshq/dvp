@@ -4,7 +4,7 @@ use alloc::string::String;
 use codama::CodamaInstructions;
 use pinocchio::Address as Pubkey;
 
-use crate::processor::shared::confidential_types::{CtTransferData, LegBRefund};
+use crate::processor::shared::confidential::{CtTransferData, LegBRefund};
 
 /// Instructions for the DvP Swap Program.
 ///

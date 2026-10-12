@@ -46,7 +46,7 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Build program
-        run: make build-sbf build-hook-fixture build-smart-wallet-fixture
+        run: make build-sbf build-hook-fixture build-smart-wallet-fixture build-confidential-fixture
 
       - name: Cache pinned test programs
         id: test-programs
