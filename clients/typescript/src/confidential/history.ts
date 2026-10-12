@@ -172,11 +172,9 @@ export class BalanceHistory {
                 "Invalid Record write",
               );
             const previous = this.records.get(address);
-            if (!previous)
-              throw new ConfidentialError(
-                "IncompleteHistory",
-                "Missing Record initialization",
-              );
+            // Unknown Record contents are resolved only if a balance proof
+            // needs them. Unrelated writes do not make escrow history incomplete.
+            if (!previous) continue;
             const bytes = new Uint8Array(
               Math.max(previous.length, start + write.data.length),
             );

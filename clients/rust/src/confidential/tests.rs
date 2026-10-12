@@ -150,9 +150,38 @@ fn recover_false_and_corrupt_ae_balances_above_u32() {
             credit * 3
         );
         assert!(read_escrow_balance(&state, 11, &keys, &history[1..]).is_err());
+        for error in [
+            read_available_balance(&state, &keys, &history[1..]).unwrap_err(),
+            read_escrow_balance(&state, 11, &keys, &history[1..]).unwrap_err(),
+        ] {
+            let cause = std::error::Error::source(&error)
+                .expect("history fallback must preserve the initial balance error");
+            assert_eq!(
+                cause.to_string(),
+                ConfidentialError::BalanceMismatch.to_string()
+            );
+            assert!(matches!(
+                &error,
+                ConfidentialError::BalanceRecoveryFailed { initial, history }
+                    if matches!(initial.as_ref(), ConfidentialError::BalanceMismatch)
+                        && matches!(history.as_ref(), ConfidentialError::IncompleteHistory)
+            ));
+            assert!(error
+                .to_string()
+                .contains("transaction history is incomplete"));
+        }
     }
     // A correct AE value works above u32 without replay or a discrete log.
     state.decryptable_available_balance = keys.ae.encrypt(credit * 3).into();
+    let foreign_keys = EscrowKeys::from_seed(&[8; 32]).unwrap();
+    assert!(matches!(
+        read_available_balance(&state, &foreign_keys, &history),
+        Err(ConfidentialError::EscrowKeyMismatch)
+    ));
+    assert!(matches!(
+        read_escrow_balance(&state, 0, &foreign_keys, &history),
+        Err(ConfidentialError::EscrowKeyMismatch)
+    ));
     assert_eq!(
         read_escrow_balance(&state, 0, &keys, &[])
             .unwrap()
@@ -372,7 +401,37 @@ fn history_decodes_inline_and_record_validity_proofs() {
         decryptable_available_balance: keys.ae.encrypt(0).into(),
         ..Default::default()
     };
-    for instructions in [inline, staged] {
+    // Missing initialization is harmless until the Record is needed by a proof.
+    // It must never be reconstructed with invented zero bytes.
+    let missing_init = ExecutedTransaction {
+        instructions: staged[1..].to_vec(),
+        inner_instructions: Default::default(),
+        succeeded: true,
+    };
+    assert!(matches!(
+        BalanceHistory::new(escrow).push(&missing_init),
+        Err(ConfidentialError::IncompleteHistory)
+    ));
+    let mut resolved = BalanceHistory::new(escrow);
+    resolved
+        .push_with_proof_accounts(&missing_init, |_| {
+            let mut data = vec![0; spl_record::state::RecordData::WRITABLE_START_INDEX];
+            data.extend_from_slice(bytes);
+            Some(data)
+        })
+        .unwrap();
+    assert_eq!(
+        recover_escrow_balance(&state, 0, &keys, resolved.events())
+            .unwrap()
+            .pending,
+        (3 << AMOUNT_LO_BITS) + 42
+    );
+    let unrelated = record_ix(spl_record::instruction::RecordInstruction::Write {
+        offset: 0,
+        data: &[42],
+    });
+    for mut instructions in [inline, staged] {
+        instructions.insert(0, unrelated.clone());
         let mut history = BalanceHistory::new(escrow);
         history
             .push(&ExecutedTransaction {
