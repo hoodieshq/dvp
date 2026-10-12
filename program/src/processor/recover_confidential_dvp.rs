@@ -1,10 +1,26 @@
 use crate::{
-    processor::shared::confidential::{
-        check_confidential_escrow, check_refund_contexts, LegBRefund,
+    error::DvpSwapProgramError,
+    processor::shared::{
+        account_check::{verify_account_owner, verify_signer},
+        confidential::{
+            check_confidential_escrow, check_confidential_refund, refund_confidential_leg,
+            LegBRefund,
+        },
+        token_utils::{
+            get_mint_decimals, get_token_account_balance, transfer_checked_cpi,
+            verify_ata_recipient_if_initialized, verify_canonical_ata, MAX_HOOK_REMAINING_ACCOUNTS,
+        },
     },
     require, require_len,
+    state::swap_dvp::{NONCE_TOMBSTONE_SEED, SWAP_DVP_SEED},
 };
-use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
+use pinocchio::{
+    account::AccountView,
+    cpi::{Seed, Signer},
+    error::ProgramError,
+    Address, ProgramResult,
+};
+use pinocchio_token_2022::{instructions::CloseAccount, ID as TOKEN_2022_PROGRAM_ID};
 
 const FIXED_ACCOUNTS_LEN: usize = 13;
 
@@ -12,7 +28,7 @@ const FIXED_ACCOUNTS_LEN: usize = 13;
 ///
 /// Confidential leg B counterpart of
 /// [`process_recover_dvp`](super::recover_dvp::process_recover_dvp): after the
-/// swap closes, `user_b` recovers leg B funds left by a partial refund, a pending
+/// swap closes, `user_b` recovers tokens left by a partial refund, a pending
 /// credit or a public deposit. Pending credits must first be applied with
 /// [`process_apply_confidential_dvp`](super::apply_confidential_dvp::process_apply_confidential_dvp).
 /// The leg B escrow closes only when all public and confidential balances are
@@ -30,44 +46,147 @@ const FIXED_ACCOUNTS_LEN: usize = 13;
 /// [`LegBRefund`]. Refund modes and context requirements follow
 /// [`process_reclaim_confidential_dvp`](super::reclaim_confidential_dvp::process_reclaim_confidential_dvp).
 ///
-/// # Implementation Status
-/// Currently decodes the arguments, checks the account count, optional-context
-/// layout and escrow extension, then returns `InvalidInstructionData` without
-/// CPIs or state changes. PDA, tombstone, authorization and proof checks are
-/// not implemented yet.
 pub fn process_recover_confidential_dvp(
     program_id: &Address,
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
     let args = parse_instruction_data(instruction_data)?;
-
     require!(
         accounts.len() >= FIXED_ACCOUNTS_LEN,
         ProgramError::NotEnoughAccountKeys
     );
-    let [_signer_info, _swap_dvp_info, _nonce_tombstone_info, _mint_info, dvp_escrow_ata_info, _signer_dest_ata_info, _token_program_info, _memo_program_info, _zk_elgamal_proof_program_info, equality_context_info, validity_context_info, range_context_info, zero_context_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
+    recover(program_id, accounts, &args)
+}
+
+// Separate the decoded transfer payload from validation and CPI temporaries.
+#[inline(never)]
+fn recover(
+    program_id: &Address,
+    accounts: &[AccountView],
+    args: &RecoverConfidentialDvpArgs,
+) -> ProgramResult {
+    let (fixed, remaining) = accounts.split_at(FIXED_ACCOUNTS_LEN);
+    let [signer, swap, tombstone, mint, escrow, destination, token, memo, zk_program, contexts @ ..] =
+        fixed
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-
-    check_confidential_escrow(dvp_escrow_ata_info)?;
-    check_refund_contexts(
+    require!(
+        remaining.len() <= MAX_HOOK_REMAINING_ACCOUNTS,
+        ProgramError::InvalidArgument
+    );
+    verify_signer(signer, true)?;
+    require!(
+        signer.address() == &args.user_b,
+        DvpSwapProgramError::SignerNotParty
+    );
+    require!(
+        mint.address() == &args.mint_b,
+        ProgramError::InvalidAccountData
+    );
+    require!(
+        token.address() == &TOKEN_2022_PROGRAM_ID,
+        ProgramError::IncorrectProgramId
+    );
+    let nonce_bytes = args.nonce.to_le_bytes();
+    let (expected_swap, bump) = Address::find_program_address(
+        &[
+            SWAP_DVP_SEED,
+            args.settlement_authority.as_ref(),
+            args.user_a.as_ref(),
+            args.user_b.as_ref(),
+            args.mint_a.as_ref(),
+            args.mint_b.as_ref(),
+            &nonce_bytes,
+        ],
+        program_id,
+    );
+    require!(swap.address() == &expected_swap, ProgramError::InvalidSeeds);
+    require!(
+        swap.owned_by(&pinocchio_system::ID) && swap.is_data_empty(),
+        DvpSwapProgramError::DvpStillOpen
+    );
+    // With state gone, this tombstone authenticates the supplied seed parties.
+    let (expected_tombstone, _) =
+        Address::find_program_address(&[NONCE_TOMBSTONE_SEED, expected_swap.as_ref()], program_id);
+    require!(
+        tombstone.address() == &expected_tombstone,
+        ProgramError::InvalidAccountData
+    );
+    require!(
+        tombstone.owned_by(program_id),
+        DvpSwapProgramError::DvpNeverCreated
+    );
+    verify_canonical_ata(escrow, swap.address(), &args.mint_b, token)?;
+    verify_account_owner(escrow, token.address())?;
+    check_confidential_escrow(escrow)?;
+    verify_canonical_ata(destination, signer.address(), &args.mint_b, token)?;
+    verify_ata_recipient_if_initialized(destination, signer.address(), &args.mint_b)?;
+    check_confidential_refund(
         program_id,
         &args.leg_b_refund,
-        equality_context_info,
-        validity_context_info,
-        range_context_info,
-        zero_context_info,
+        escrow,
+        destination,
+        signer,
+        zk_program,
+        contexts,
     )?;
-
-    // Reject before any mutation or CPI until this lifecycle operation is implemented.
-    Err(ProgramError::InvalidInstructionData)
+    let bump_bytes = [bump];
+    let seeds = [
+        Seed::from(SWAP_DVP_SEED),
+        Seed::from(args.settlement_authority.as_ref()),
+        Seed::from(args.user_a.as_ref()),
+        Seed::from(args.user_b.as_ref()),
+        Seed::from(args.mint_a.as_ref()),
+        Seed::from(args.mint_b.as_ref()),
+        Seed::from(&nonce_bytes),
+        Seed::from(&bump_bytes),
+    ];
+    let signers = [Signer::from(&seeds)];
+    let reset = refund_confidential_leg(
+        &args.leg_b_refund,
+        escrow,
+        mint,
+        destination,
+        swap,
+        signer,
+        memo,
+        contexts,
+        remaining,
+        &signers,
+    )?;
+    if matches!(args.leg_b_refund, LegBRefund::None) {
+        let amount = get_token_account_balance(escrow)?;
+        if amount > 0 {
+            transfer_checked_cpi(
+                escrow,
+                mint,
+                destination,
+                swap,
+                amount,
+                get_mint_decimals(mint)?,
+                token.address(),
+                memo,
+                remaining,
+                &signers,
+            )?;
+        }
+    }
+    // Partial always leaves the escrow open. Full may leave pending or public
+    // tokens; None may withdraw public tokens while pending is still present.
+    if reset && get_token_account_balance(escrow)? == 0 {
+        CloseAccount {
+            account: escrow,
+            destination: signer,
+            authority: swap,
+            token_program: token.address(),
+        }
+        .invoke_signed(&signers)?;
+    }
+    Ok(())
 }
 
-// These arguments are consumed by the lifecycle implementation in a later stage.
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 struct RecoverConfidentialDvpArgs {
     settlement_authority: Address,

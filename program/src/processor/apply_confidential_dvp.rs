@@ -1,10 +1,17 @@
 use crate::{
-    processor::shared::confidential::{check_confidential_escrow, check_confidential_swap},
+    error::DvpSwapProgramError,
+    processor::shared::{
+        apply_pending_balance_cpi, check_confidential_escrow, verify_canonical_ata, verify_signer,
+    },
     require, require_len,
+    state::swap_dvp::{ConfidentialSwapDvp, NONCE_TOMBSTONE_SEED, SWAP_DVP_SEED},
 };
-use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
-
-const FIXED_ACCOUNTS_LEN: usize = 5;
+use pinocchio::{
+    account::AccountView,
+    cpi::{Seed, Signer},
+    error::ProgramError,
+    Address, ProgramResult,
+};
 
 /// Processes the ApplyConfidentialDvp instruction.
 ///
@@ -28,41 +35,105 @@ const FIXED_ACCOUNTS_LEN: usize = 5;
 /// available balance (36 bytes), then the five seed addresses and nonce in
 /// public Recover order. The counter and decryptable balance are forwarded
 /// to Token-2022; the DvP program cannot verify the encrypted plaintext.
-///
-/// # Implementation Status
-/// Currently decodes the arguments and checks the account count plus the open
-/// swap's mode or closed path's escrow extension, then returns
-/// `InvalidInstructionData` without CPIs or state changes. PDA, tombstone and
-/// authorization checks are not implemented yet.
 pub fn process_apply_confidential_dvp(
     program_id: &Address,
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let _args = parse_instruction_data(instruction_data)?;
+    let args = parse_instruction_data(instruction_data)?;
 
-    require!(
-        accounts.len() >= FIXED_ACCOUNTS_LEN,
-        ProgramError::NotEnoughAccountKeys
-    );
-    let [_signer_info, swap_dvp_info, _nonce_tombstone_info, dvp_ata_b_info, _token_program_info] =
-        &accounts[..FIXED_ACCOUNTS_LEN]
+    let [signer_info, swap_dvp_info, nonce_tombstone_info, dvp_ata_b_info, token_program_info] =
+        accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
+    verify_signer(signer_info, false)?;
+    require!(
+        token_program_info.address() == &pinocchio_token_2022::ID,
+        ProgramError::IncorrectProgramId
+    );
+
+    let nonce_bytes = args.nonce.to_le_bytes();
+    let (expected_swap, bump) = Address::find_program_address(
+        &[
+            SWAP_DVP_SEED,
+            args.settlement_authority.as_ref(),
+            args.user_a.as_ref(),
+            args.user_b.as_ref(),
+            args.mint_a.as_ref(),
+            args.mint_b.as_ref(),
+            &nonce_bytes,
+        ],
+        program_id,
+    );
+    require!(
+        swap_dvp_info.address() == &expected_swap,
+        ProgramError::InvalidSeeds
+    );
+
+    let (expected_tombstone, _) =
+        Address::find_program_address(&[NONCE_TOMBSTONE_SEED, expected_swap.as_ref()], program_id);
+    require!(
+        nonce_tombstone_info.address() == &expected_tombstone,
+        ProgramError::InvalidAccountData
+    );
 
     if swap_dvp_info.owned_by(program_id) {
-        check_confidential_swap(program_id, swap_dvp_info)?;
+        let dvp = ConfidentialSwapDvp::load(&swap_dvp_info.try_borrow()?)?;
+        require!(
+            signer_info.address() == &dvp.base.user_a
+                || signer_info.address() == &dvp.base.user_b
+                || signer_info.address() == &dvp.base.settlement_authority,
+            DvpSwapProgramError::SignerNotParty
+        );
     } else {
-        check_confidential_escrow(dvp_ata_b_info)?;
+        // As in Recover, a closed PDA must be empty and its permanent
+        // tombstone authenticates the supplied parties, mints and nonce.
+        require!(
+            swap_dvp_info.owned_by(&pinocchio_system::ID) && swap_dvp_info.is_data_empty(),
+            DvpSwapProgramError::DvpStillOpen
+        );
+        require!(
+            nonce_tombstone_info.owned_by(program_id),
+            DvpSwapProgramError::DvpNeverCreated
+        );
+        require!(
+            signer_info.address() == &args.user_a
+                || signer_info.address() == &args.user_b
+                || signer_info.address() == &args.settlement_authority,
+            DvpSwapProgramError::SignerNotParty
+        );
     }
 
-    // Reject before any mutation or CPI until this lifecycle operation is implemented.
-    Err(ProgramError::InvalidInstructionData)
+    verify_canonical_ata(
+        dvp_ata_b_info,
+        swap_dvp_info.address(),
+        &args.mint_b,
+        token_program_info,
+    )?;
+    check_confidential_escrow(dvp_ata_b_info)?;
+    let bump_bytes = [bump];
+    let seeds = [
+        Seed::from(SWAP_DVP_SEED),
+        Seed::from(args.settlement_authority.as_ref()),
+        Seed::from(args.user_a.as_ref()),
+        Seed::from(args.user_b.as_ref()),
+        Seed::from(args.mint_a.as_ref()),
+        Seed::from(args.mint_b.as_ref()),
+        Seed::from(&nonce_bytes),
+        Seed::from(&bump_bytes),
+    ];
+    // Token-2022 records the supplied counter and decryptable balance. Neither
+    // is used to authorize Apply or to validate the ElGamal pending balance.
+    apply_pending_balance_cpi(
+        dvp_ata_b_info,
+        swap_dvp_info,
+        args.expected_pending_balance_credit_counter,
+        &args.new_decryptable_available_balance,
+        &[Signer::from(&seeds)],
+    )
 }
 
-// These arguments are consumed by the lifecycle implementation in a later stage.
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 struct ApplyConfidentialDvpArgs {
     expected_pending_balance_credit_counter: u64,

@@ -4,7 +4,7 @@ use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResul
 
 use super::{has_confidential_transfer_account, LegBRefund};
 
-use crate::{error::DvpSwapProgramError, state::swap_dvp::ConfidentialSwapDvp};
+use crate::error::DvpSwapProgramError;
 
 #[inline(always)]
 fn check_optional(info: &AccountView, present: bool, program_id: &Address) -> ProgramResult {
@@ -49,15 +49,6 @@ pub fn check_refund_contexts(
         range,
     )?;
     check_optional(zero, matches!(refund, LegBRefund::Full(_)), program_id)
-}
-
-#[inline(always)]
-pub fn check_confidential_swap(program_id: &Address, swap: &AccountView) -> ProgramResult {
-    if !swap.owned_by(program_id) {
-        return Err(ProgramError::InvalidAccountOwner);
-    }
-    ConfidentialSwapDvp::load(&swap.try_borrow()?)?;
-    Ok(())
 }
 
 #[inline(always)]
