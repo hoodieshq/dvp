@@ -91,12 +91,13 @@ unit-test:
 	@echo "Running unit tests for swap program..."
 	pnpm test:unit
 	@cd program && cargo test
-	@cargo test -p dvp-swap-program-client --all-features
+	@cargo test -p dvp-swap-program-client --all-features --lib
 
 # Integration tests (litesvm-based).
 integration-test-no-build: check-test-fixtures
 	@echo "Running integration tests for swap program..."
 	@cd tests/integration-tests && cargo test -- --nocapture
+	@cargo test -p dvp-swap-program-client --all-features --test integration -- --nocapture
 
 integration-test: build integration-test-no-build
 
