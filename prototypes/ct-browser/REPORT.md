@@ -10,9 +10,16 @@ Runs on 2026-10-12, devnet, DvP program `bVntZ9Us9Wv8v2hMytmzLs4omXcZf3UwJ5xXbB3
 - Browser: Firefox Developer Edition on macOS arm64, `vite dev` on localhost.
   This was the second full cycle in that browser with the same role keys; the
   first also passed but its log was not kept.
+- Safari on macOS arm64, same dev server, run on 2026-10-13. The first Safari
+  run failed at B's ApplyPendingBalance (deviation 9). After the fix
+  (`3058bec`) the cycle passed. The pasted log was again a repeat cycle with
+  the same roles.
 - Bun harness (`scripts/smoke.ts`): the same `flow.ts` and the same SvelteKit
   handlers in-process, without a dev server. A full cycle passed there first.
-  Its numbers match the browser run.
+  Its numbers match the browser runs.
+
+Signatures below are from the Firefox run. The Safari run had the same
+transaction count, wire sizes and treasury spend.
 
 ## Steps
 
@@ -43,35 +50,36 @@ WASM:
 - Size: `index_bg.wasm` is 2,718,224 bytes, 2.40 MB gzipped in the production
   build. The bundle contains exactly one copy and SSR loads none.
 - Load: the dynamic import of the CT module graph (zk-sdk WASM, Token-2022
-  confidential helpers, DvP client) took 72 ms in Firefox. Fetching the WASM
-  from localhost took 3 ms.
+  confidential helpers, DvP client) took 72 ms in Firefox, with the WASM
+  fetched from localhost in 3 ms. In Safari it took 145 ms with the WASM
+  already in the HTTP cache.
 - Over a real network, download time will dominate: about 2.4 MB gzipped.
   That is not measured here.
 
-Proof generation, measured around each builder call in ms. The Firefox numbers
-come from the pasted run; the Bun numbers from the harness run.
+Proof generation, measured around each builder call in ms. The browser
+numbers come from the pasted runs; the Bun numbers from the first harness run.
 
-| Step | What is generated | Firefox | Bun |
-|---|---|---|---|
-| CT account setup (A + B configure, B apply) | 2 pubkey-validity proofs, 1 AE re-encryption with ElGamal decrypt | 214 | 220 |
-| Create | Amount ciphertexts, pubkey-validity proof, AE zero | 3 | 6 |
-| Funding B | CT transfer: equality, 3-handle validity, U128 range | 636 | 574 |
-| Apply escrow | Balance decrypt and AE re-encryption | 175 | 206 |
-| Settle | Payment equality/validity/range, eqLo, eqHi, zero proofs | 952 | 866 |
-| Check (A apply) | Balance decrypt and AE re-encryption | 185 | 200 |
+| Step | What is generated | Firefox | Safari | Bun |
+|---|---|---|---|---|
+| CT account setup (A + B configure, B apply) | 2 pubkey-validity proofs, 1 AE re-encryption with ElGamal decrypt | 214 | 217 | 220 |
+| Create | Amount ciphertexts, pubkey-validity proof, AE zero | 3 | 4 | 6 |
+| Funding B | CT transfer: equality, 3-handle validity, U128 range | 636 | 615 | 574 |
+| Apply escrow | Balance decrypt and AE re-encryption | 175 | 201 | 206 |
+| Settle | Payment equality/validity/range, eqLo, eqHi, zero proofs | 952 | 945 | 866 |
+| Check (A apply) | Balance decrypt and AE re-encryption | 185 | 200 | 200 |
 
-Elapsed time per step in Firefox, including RPC round trips and confirmation:
+Elapsed time per step, including RPC round trips and confirmation:
 
-| Step | Elapsed (s) |
-|---|---|
-| Setup | 4.0 |
-| CT accounts | 6.7 |
-| Create | 2.1 |
-| Fund A | 2.0 |
-| Fund B | 3.1 |
-| Apply | 2.3 |
-| Settle | 4.4 |
-| Check | 3.3 |
+| Step | Firefox (s) | Safari (s) |
+|---|---|---|
+| Setup | 4.0 | 8.2 |
+| CT accounts | 6.7 | 7.3 |
+| Create | 2.1 | 1.9 |
+| Fund A | 2.0 | 1.9 |
+| Fund B | 3.1 | 3.8 |
+| Apply | 2.3 | 2.3 |
+| Settle | 4.4 | 4.4 |
+| Check | 3.3 | 2.9 |
 
 ## Transactions, sizes, costs
 
@@ -240,6 +248,15 @@ but not the number of transactions.
 8. **Use one fee-payer signer object.** Use a single
    `createNoopSigner(treasury)` instance everywhere. kit refuses two signer
    objects for one address.
+9. **Safari signs Ed25519 non-deterministically.** Its WebCrypto Ed25519
+   returns a different signature each time, so `deriveConfidentialKeys` with a
+   kit `KeyPairSigner` returns new ElGamal and AE keys on every call. The first
+   Safari run configured B's account with one key pair, re-derived at
+   ApplyPendingBalance and failed with "Decryption failed: The secret key may
+   be incorrect or the encrypted amount may be out of range". Funds credited
+   under the lost keys cannot be decrypted. The fix (`3058bec`) derives the keys
+   once per role and stores them with the role key. Firefox and Bun sign
+   deterministically and do not show the problem.
 
 ## What the demo migration must change
 
@@ -267,6 +284,8 @@ but not the number of transactions.
   path would let the policy refuse the treasury as context authority
   entirely, but the helpers are internal (`confidential/proofs.ts`), not
   exported.
+- Derive CT wallet keys once and persist them with the role. Never re-derive
+  from a signature (deviation 9). Test every flow in Safari.
 - `/api/setup` must create both parties' mint B ATAs and B's mint A ATA. Settle
   requires `userBDestinationAtaA`, `userAAtaA` and `userBAtaB` to exist.
 
