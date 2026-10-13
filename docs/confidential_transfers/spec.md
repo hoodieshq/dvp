@@ -2,12 +2,12 @@
 
 **Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the implemented behavior and the remaining release checks in sections 11 and 13. The current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers, all confidential on-chain lifecycle instructions and the Rust and TypeScript confidential clients.
 
-**Source baseline.** Program sources at `solana-foundation/dvp` main `dfd47bf`, with the deployed mainnet program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
+**Source baseline.** Program sources at `solana-foundation/dvp` main `df9919e`, with the deployed mainnet program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
 
 **Release baseline.** The existing DvP program is deployed on mainnet at
 `dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`. The confidential changes are
 not yet deployed and target an in-place upgrade at that same address.
-Compatibility is currently checked against source baseline `dfd47bf`; the exact
+Compatibility is currently checked against source baseline `df9919e`; the exact
 commit/tag and binary of the deployed release still need to be pinned for
 upgrade and rollback validation.
 
@@ -554,7 +554,7 @@ Hook programs that read or limit the amount see `u64::MAX` and may reject. The b
 
 ## 9. Errors
 
-Confidential error codes are 24-36, in the table order below. Codes 0-23 retain the source baseline ABI at `dfd47bf`; compare against the deployed mainnet release before upgrading.
+Confidential error codes are 24-36, in the table order below. Codes 0-23 retain the source baseline ABI at `df9919e`; compare against the deployed mainnet release before upgrading.
 
 | Error | When |
 | --- | --- |
@@ -598,8 +598,8 @@ Known limitations, not prevented by the program:
 
 ## 11. Release compatibility
 
-- **Program id** `dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq` is the existing mainnet deployment address. The confidential extension upgrades this program in place and retains its id. "Unchanged" currently means unchanged against source baseline `dfd47bf`; pin the deployed binary and released client versions before claiming deployment compatibility. The earlier Cantina audit linked in the README does not establish coverage of this extension.
-- **Instructions 0-5**: wire format frozen (data, account count and order, signer/writable flags). The checked-in `test_public_abi.rs` compares the current IDL structurally with `tests/fixtures/public-abi.json` from `dfd47bf`. Executing pinned old-client bytes on the new binary remains a release check (section 13).
+- **Program id** `dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq` is the existing mainnet deployment address. The confidential extension upgrades this program in place and retains its id. "Unchanged" currently means unchanged against source baseline `df9919e`; pin the deployed binary and released client versions before claiming deployment compatibility. The earlier Cantina audit linked in the README does not establish coverage of this extension.
+- **Instructions 0-5**: wire format frozen (data, account count and order, signer/writable flags). The checked-in `test_public_abi.rs` compares the current IDL structurally with `tests/fixtures/public-abi.json` from `df9919e`. Executing pinned old-client bytes on the new binary remains a release check (section 13).
 - **Accounts**: no migration (5.2).
 - **Clients**: the source-baseline `verify` helpers pin `SwapDvp` to 458 bytes and fail closed on a confidential swap; the raw generated decoders read the base and ignore the tail. Upgraded clients accept 458 or 586: the base with the generated decoder on `data[..458]`, the tail by hand; the IDL describes the base only. Indexers that filter `getProgramAccounts` by `dataSize: 458` miss confidential swaps; the client adds a helper that queries both sizes.
 - **Expected rollback behavior**, based on the source baseline and still requiring binary validation: no CT-held leg B funds move. Its Settle reads `amount_b = u64::MAX` and fails `LegNotFunded`, unless the mint authority has minted that much publicly into escrow B. Its Cancel, Reject and RecoverDvp fail at `CloseAccount` while escrow B holds a CT balance (`user_a` can still Reclaim leg A), and close the swap when escrow B is empty. Its Reclaim by `user_b` moves only a public balance of escrow B, as in the public mode.
@@ -717,7 +717,7 @@ Keys:
 
 Checked-in compatibility coverage:
 
-- `tests/integration-tests/src/test_public_abi.rs` compares the public IDL structure with the pinned `dfd47bf` fixture: program id, accounts, PDAs, instructions 0-5 and errors 0-23.
+- `tests/integration-tests/src/test_public_abi.rs` compares the public IDL structure with the pinned `df9919e` fixture: program id, accounts, PDAs, instructions 0-5 and errors 0-23.
 - Public lifecycle tests execute against the current binary, alongside confidential mode-separation tests.
 - Swap loaders and checked clients distinguish exact 458 / 586-byte layouts and reject malformed sizes. Zero-length tombstones are not swaps.
 

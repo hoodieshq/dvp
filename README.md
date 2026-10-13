@@ -226,5 +226,5 @@ tests/integration-tests/   LiteSVM integration tests
 An earlier version of the program was audited by [Cantina](https://cantina.xyz/portfolio/fe870bb4-d96d-4902-8aec-9dfcfa2d6a79).
 
 The confidential extension is built on `main` at
-[`df9919e`](https://github.com/hoodieshq/dvp/commit/df9919ed02c25a93620e7f6820107c9050ce3b92).
+[`df9919e`](https://github.com/solana-foundation/dvp/commit/df9919ed02c25a93620e7f6820107c9050ce3b92).
 It and its client changes require a separate external review; the earlier audit is not evidence of their coverage.

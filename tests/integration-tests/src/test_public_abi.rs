@@ -1,4 +1,4 @@
-//! Structural compatibility with the public IDL at dfd47bf.
+//! Structural compatibility with the public IDL at df9919e.
 use serde_json::{json, Value};
 
 // Documentation and error wording are not part of the wire contract.
