@@ -1,10 +1,15 @@
 # DvP Confidential Transfer: Program Specification
 
-**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the complete target behavior; the current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers, all confidential on-chain lifecycle instructions and the Rust and TypeScript confidential clients.
+**Status.** Implementation specification, based on the design reviewed on 26 September 2026. This document describes the implemented behavior and the remaining release checks in sections 11 and 13. The current implementation provides test infrastructure, state layouts, instruction ABI checks, shared CT/ZK helpers, all confidential on-chain lifecycle instructions and the Rust and TypeScript confidential clients.
 
-**Source baseline.** Program sources at `solana-foundation/dvp` main `dfd47bf`, including the deployed program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
+**Source baseline.** Program sources at `solana-foundation/dvp` main `df9919e`, with the deployed mainnet program id (`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`).
 
-**Release baseline.** This work targets an in-place, backward-compatible upgrade. "Mainnet release" below means the deployed binary and its published clients; its exact commit/tag and program id must be confirmed before release. Until then, compatibility is checked against `dfd47bf`.
+**Release baseline.** The existing DvP program is deployed on mainnet at
+`dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`. The confidential changes are
+not yet deployed and target an in-place upgrade at that same address.
+Compatibility is currently checked against source baseline `df9919e`; the exact
+commit/tag and binary of the deployed release still need to be pinned for
+upgrade and rollback validation.
 
 ## 1. Purpose
 
@@ -16,7 +21,7 @@ Preserved properties: atomic Settle; the Settle payment equals the agreed amount
 
 - Support transfer hooks on `mint_b` (section 8).
 - Implement in the clients, and describe in the docs, the derivation of the shared seed and of the ElGamal and AE keys from it (section 4).
-- Upgrade the mainnet program in place: no account migration; the public mode and its ABI stay unchanged (section 11).
+- Upgrade the existing mainnet program in place without account migration; preserve the public mode and ABI and validate against the deployed release baseline (section 11).
 
 **Amount cap.** A CT transfer carries at most 48 bits, so `amount_b < 2^48` base units (section 4.3):
 
@@ -144,6 +149,11 @@ checks only the swap owner, layout and PDA:
 4. `0 < expected_amount_b < 2^48`.
 5. The escrow's `decryptable_available_balance` decrypts under `escrow_ae`, and that value matches the available ElGamal ciphertext. An authenticated but false AE value fails verification; repair it through a verified Apply before funding.
 
+These checks do not compare the public terms with the agreed trade. Callers
+must separately compare parties, mints, settlement authority, amount A,
+destinations, nonce, expiry and earliest settlement time before funding or
+settlement. A valid PDA and amount B do not prove agreement on those terms.
+
 ### 4.5 Test vectors
 
 The clients ship a vectors file (`clients/test-vectors/confidential-amount-b.json`) with at least: `seed_master_key + swap_dvp → shared_seed`; `shared_seed → elgamal pubkey, elgamal secret, ae key, opening_lo, opening_hi`; `(shared_seed, amount_b) → Enc(lo), Enc(hi)` for `amount_b ∈ {1, 2^16 − 1, 2^16, 2^48 − 1}`. Rust and TypeScript tests assert them.
@@ -242,12 +252,12 @@ Why it holds: the range proof inside the transfer forces `lo < 2^16`, `hi < 2^32
 
 | Disc. | Instruction | Mode |
 | --- | --- | --- |
-| 0 | CreateDvp | public, mainnet |
-| 1 | ReclaimDvp | public, mainnet |
-| 2 | SettleDvp | public, mainnet |
-| 3 | CancelDvp | public, mainnet |
-| 4 | RejectDvp | public, mainnet |
-| 5 | RecoverDvp | public, mainnet |
+| 0 | CreateDvp | public, source baseline |
+| 1 | ReclaimDvp | public, source baseline |
+| 2 | SettleDvp | public, source baseline |
+| 3 | CancelDvp | public, source baseline |
+| 4 | RejectDvp | public, source baseline |
+| 5 | RecoverDvp | public, source baseline |
 | 6 | CreateConfidentialDvp | confidential |
 | 7 | ReclaimConfidentialDvp | confidential |
 | 8 | SettleConfidentialDvp | confidential |
@@ -258,7 +268,7 @@ Why it holds: the range proof inside the transfer forces `lo < 2^16`, `hi < 2^32
 
 Confidential discriminators mirror the public ones at +6; Apply has no public counterpart.
 
-The mainnet instructions keep their wire format and logic; their only edits are listed in 7.9. Logic shared by both families (context checks, CT CPI builders, leg A transfers, readiness checks) lives in helpers.
+The public instructions keep their wire format and logic; their only edits are listed in 7.9. Logic shared by both families (context checks, CT CPI builders, leg A transfers, readiness checks) lives in helpers.
 
 ### 7.2 Conventions for the confidential instructions
 
@@ -537,13 +547,14 @@ What the client does:
 
 - Resolves the hook's `ExtraAccountMetaList` with `amount = u64::MAX` and the CT transfer's source/destination/authority (authority = the wallet for funding, the `SwapDvp` PDA for escrow withdrawals).
 - Builds Settle with hook extras on either leg only in the v1 transaction format. This is the supported scope: the size of a hooked Settle in v0 depends on the hook's extra accounts and has not been measured (section 12).
+- A hook validation account (`ExtraAccountMetaList`) is optional. Both client resolvers return the hook program as readonly and non-signer when it is absent. If present, the list is resolved normally; malformed data and fetch errors remain errors.
 - The Settle surplus transfer reuses leg B's extras with a different destination, the same limitation the public mode documents today ("TransferHook + over-deposit").
 
 Hook programs that read or limit the amount see `u64::MAX` and may reject. The buyer's own funding transfer into escrow also triggers the hook. Successful funding does not guarantee that subsequent transfers remain possible: the hook authority can change the hook after funding, or the hook can change its behavior. If it rejects the sentinel, Settle and all CT refund paths fail atomically. Returning leg B then depends on the hook accepting the transfer again; DvP cannot bypass it. Leg A remains independently reclaimable if its own mint and destination permit the transfer.
 
 ## 9. Errors
 
-Codes continue after the mainnet release's last code (23 at `dfd47bf`; re-check at release).
+Confidential error codes are 24-36, in the table order below. Codes 0-23 retain the source baseline ABI at `df9919e`; compare against the deployed mainnet release before upgrading.
 
 | Error | When |
 | --- | --- |
@@ -570,8 +581,8 @@ Codes continue after the mainnet release's last code (23 at `dfd47bf`; re-check 
 5. No terminal instruction applies pending; a credit to the escrow's pending balance, from anyone, cannot invalidate prepared proofs or block Settle and refunds. Only parties can Apply.
 6. Each party can authorize refund of its leg without the other parties, as in the public mode, given the seed. Execution still depends on the mint's restrictions, including its hook and freeze state, and a ready destination account.
 7. Public and confidential instructions never operate on the other mode's swap (5.1); the mode comes from on-chain state.
-8. Public instructions behave exactly as the mainnet release, and every `SwapDvp` created by the mainnet release stays fully operable after the upgrade (section 11).
-9. A confidential swap processed by the mainnet binary (rollback) cannot settle and cannot release CT-held leg B funds, except through the mint authority's own public mint (section 11).
+8. Public instructions preserve the source baseline ABI. Execution against historical deployed accounts remains a release validation requirement (section 11).
+9. Rollback must not move CT-held leg B funds. The expected baseline behavior in section 11 still needs a checked-in binary rollback suite.
 
 Known limitations, not prevented by the program:
 
@@ -581,19 +592,19 @@ Known limitations, not prevented by the program:
 - Metadata stays public: which instruction was used, account sizes and counts, whether there was a surplus, timing.
 - The mint auditor, if configured, sees all amounts.
 - `user_b` can block Cancel and Reject indefinitely by making its own `mint_b` ATA not ready (for example, disabling confidential credits). `user_a` still reclaims leg A, but the swap cannot close.
-- Any party can write a wrong `new_decryptable_available_balance` through Apply. The others can rebuild the escrow balance from complete transaction history and the proof data used by those transactions; direct ElGamal decoding only works up to 32 bits. Rust replays inline proofs, SPL Record writes and ConfidentialMint/Burn. Proofs stored by other programs require historical account bytes through `BalanceHistory::push_with_proof_accounts`; ordinary RPC transaction metadata alone does not contain them. Missing data can prevent recovery of an unknown large balance. All reconstructed available and pending limbs and the pending counter must match the account snapshot.
+- Any party can write a wrong `new_decryptable_available_balance` through Apply. The others can rebuild the escrow balance from complete transaction history and the proof data used by those transactions; direct ElGamal decoding only works up to 32 bits. Both clients replay inline proofs, SPL Record writes and ConfidentialMint/Burn. Writes to a pre-existing Record with no initialization in the supplied history are ignored unless a relevant proof needs its bytes. Such Records and proofs stored by other programs require historical account bytes through Rust `BalanceHistory::push_with_proof_accounts` or the resolver argument to TypeScript `BalanceHistory.push`; ordinary RPC transaction metadata alone does not contain them. Missing data can prevent recovery of an unknown large balance. All reconstructed available and pending limbs and the pending counter must match the account snapshot.
 - The mint authority can mint public tokens into escrow B (`MintTo` ignores `DisableNonConfidentialCredits`). They go to `user_b` (7.2), and escrow B stays open until then.
 - A Settle surplus above 2^48 − 1 needs a `Partial` Reclaim by `user_b` first (7.5).
 
-## 11. Mainnet compatibility
+## 11. Release compatibility
 
-- **Program id** `dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq`, upgraded in place. Baseline commit/tag of the mainnet release: _to be filled at release_; "unchanged" in this spec means unchanged against it. The Cantina audit (see the repository README) covers the baseline only.
-- **Instructions 0-5**: wire format frozen (data, account count and order, signer/writable flags). Golden tests (section 13) build them with the mainnet-release client and run them against the new binary.
+- **Program id** `dvp34bdbcEm4f4FCUjGV4mDAkDshaQR4LkK8fdcsyZq` is the existing mainnet deployment address. The confidential extension upgrades this program in place and retains its id. "Unchanged" currently means unchanged against source baseline `df9919e`; pin the deployed binary and released client versions before claiming deployment compatibility. The earlier Cantina audit linked in the README does not establish coverage of this extension.
+- **Instructions 0-5**: wire format frozen (data, account count and order, signer/writable flags). The checked-in `test_public_abi.rs` compares the current IDL structurally with `tests/fixtures/public-abi.json` from `df9919e`. Executing pinned old-client bytes on the new binary remains a release check (section 13).
 - **Accounts**: no migration (5.2).
-- **Clients**: the mainnet-release `verify` helpers pin `SwapDvp` to 458 bytes and fail closed on a confidential swap; the raw generated decoders read the base and ignore the tail. Upgraded clients accept 458 or 586: the base with the generated decoder on `data[..458]`, the tail by hand; the IDL describes the base only. Indexers that filter `getProgramAccounts` by `dataSize: 458` miss confidential swaps; the client adds a helper that queries both sizes.
-- **Rollback** to the mainnet binary moves no CT-held leg B funds. Its Settle reads `amount_b = u64::MAX` and fails `LegNotFunded`, unless the mint authority has minted that much publicly into escrow B. Its Cancel, Reject and RecoverDvp fail at `CloseAccount` while escrow B holds a CT balance (`user_a` can still Reclaim leg A), and close the swap when escrow B is empty. Its Reclaim by `user_b` moves only a public balance of escrow B, as in the public mode.
+- **Clients**: the source-baseline `verify` helpers pin `SwapDvp` to 458 bytes and fail closed on a confidential swap; the raw generated decoders read the base and ignore the tail. Upgraded clients accept 458 or 586: the base with the generated decoder on `data[..458]`, the tail by hand; the IDL describes the base only. Indexers that filter `getProgramAccounts` by `dataSize: 458` miss confidential swaps; the client adds a helper that queries both sizes.
+- **Expected rollback behavior**, based on the source baseline and still requiring binary validation: no CT-held leg B funds move. Its Settle reads `amount_b = u64::MAX` and fails `LegNotFunded`, unless the mint authority has minted that much publicly into escrow B. Its Cancel, Reject and RecoverDvp fail at `CloseAccount` while escrow B holds a CT balance (`user_a` can still Reclaim leg A), and close the swap when escrow B is empty. Its Reclaim by `user_b` moves only a public balance of escrow B, as in the public mode.
 
-Upgrade checklist:
+Release checklist (not evidence of completed deployment tests):
 
 1. Snapshot program accounts; every non-empty one is 458 bytes and decodes.
 2. On a mainnet fork, deploy the new binary and run instructions 1-5 on real open swaps.
@@ -604,7 +615,7 @@ Upgrade checklist:
 
 Settle and refunds of a funded leg B take several transactions: preparatory ones verify the proofs into context accounts, and the final one runs the DvP instruction. The clients support two transaction formats:
 
-- **v1**, up to 4096 bytes, active on mainnet since 15 September 2026: proofs go inline.
+- **v1**, up to 4096 bytes in the configured Agave 4.2 test environment: proofs go inline. Confirm v1 support on the target cluster before submitting.
 - **v0 + lookup table**, up to 1232 bytes: the range proof (1000 bytes of proof data) does not fit and is staged through SPL Record (`recr1L3PCGKLbckBqMNcJhuuyU1zgo8nBhfLVsJNwr5`), which adds transactions.
 
 Measured Rust sessions in `test_client_confidential`, with a separate fee payer and the fixture's active lookup tables. Sizes include signatures; final sizes and packing depend on the supplied LUTs:
@@ -650,12 +661,17 @@ Dependencies:
 - Rust: `solana-zk-sdk` 7.0.1 (8.x once `spl-token-confidential-transfer-proof-generation` supports it), `spl-token-confidential-transfer-proof-generation` 0.6.1, `spl-record`.
 - TypeScript: `@solana/zk-sdk` >= 0.5.4, `@solana-program/token-2022`, `@solana-program/zk-elgamal-proof`, `@solana-program/record` and `@solana/kit` 8.x for v1 messages.
 
+If the initial balance read and history fallback both fail, Rust returns
+`BalanceRecoveryFailed { initial, history }` with the initial error as its source.
+TypeScript retains the recovery code/message and sets the initial error as
+`cause`. Both clients reject a foreign escrow key before attempting recovery.
+
 ## 13. Tests
 
 Environment:
 
 - LiteSVM 0.16 (Agave 4.2, mainnet feature set) with the mainnet Token-2022 and SPL Record binaries loaded via `add_program`; real proofs.
-- The test crate moves from LiteSVM 0.7 / `solana-sdk` 2.3 to the 4.x crates; Rust 1.93.
+- Tests use the Solana 4.x crates and Rust 1.93.1.
 - LiteSVM does not enforce the 1232 / 4096-byte limits, so test helpers assert transaction size and CU of every Settle variant in both formats.
 
 Confidential flows:
@@ -691,7 +707,7 @@ Mode separation: instructions 1-4 on a confidential swap, RecoverDvp on a CT esc
 
 Transfer hooks:
 
-- A hooked `mint_b` through Settle (with and without surplus) and every unwind path, in v1.
+- A hooked `mint_b` through Settle (with and without surplus) and every unwind path, in v1. Both client suites execute Settle without an optional validation account and retain malformed-data/fetch-error checks.
 - After successful funding, update the mint's hook through Token-2022 to one that rejects `u64::MAX`. Settle, Cancel, Reject, Reclaim B and Recover B must reach that hook's rejection and leave swap, escrows, recipients and prepared proof contexts unchanged. This is an atomic failure, not a guarantee of later recovery. Reclaim A must still succeed when leg A itself is transferable.
 
 Keys:
@@ -699,14 +715,21 @@ Keys:
 - Test vectors (4.5) in Rust and TypeScript.
 - A TypeScript-derived seed verifies against a Rust-created swap: `clients/test-vectors/confidential-funding.json` holds a 586-byte swap and its escrow B dump from the Rust suite, and both clients run funding verification on it. The reverse follows from the 4.5 vectors: the same seed yields the same escrow key and ciphertext bytes, and verification compares them byte for byte.
 
-Compatibility:
+Checked-in compatibility coverage:
 
-- The full mainnet-release test suite passes unchanged on the new binary.
-- Golden bytes: each of instructions 0-5 built by the mainnet-release client (pinned version) equals the bytes the new client builds, and succeeds against the new binary.
-- Accounts written by the mainnet binary (458 bytes, `earliest` Some and None, with and without hooks) go through every public instruction on the new binary.
-- Swap loaders reject any length other than 458 / 586; zero-length accounts are nonce tombstones, not swaps.
-- Rollback: confidential swaps created by the new binary, then processed by the mainnet binary: Settle fails; Cancel and Reject fail while escrow B is funded and close the swap when it is empty; no CT-held leg B funds move (section 11).
-- The upgraded client decodes 458 and 586 bytes; the mainnet-release `verify` helpers reject 586.
+- `tests/integration-tests/src/test_public_abi.rs` compares the public IDL structure with the pinned `df9919e` fixture: program id, accounts, PDAs, instructions 0-5 and errors 0-23.
+- Public lifecycle tests execute against the current binary, alongside confidential mode-separation tests.
+- Swap loaders and checked clients distinguish exact 458 / 586-byte layouts and reject malformed sizes. Zero-length tombstones are not swaps.
+
+Remaining release compatibility checks:
+
+- Build instructions 0-5 with a pinned release client, compare golden wire bytes and execute them against the new binary.
+- Produce 458-byte accounts with the pinned old binary (`earliest` Some/None, with/without hooks), then exercise every public instruction on the new binary.
+- Run binary rollback cases for funded and empty confidential escrows and verify that no CT-held leg B funds move (section 11).
+- Run the pinned old verification helpers against confidential accounts and confirm rejection. The current repository's dual-mode readers do not substitute for this check.
+
+These are release requirements, not claims that the corresponding binary tests
+already exist in this repository.
 
 ## 14. Out of scope
 
@@ -715,5 +738,5 @@ Confidential leg A; the demo application; Mosaic/SDP/Explorer integrations; conf
 ## 15. Open questions
 
 1. **Seed derivation.** HMAC under an operator-held master key (4.1) is accepted for this design.
-2. **Mainnet baseline.** Exact release commit/tag and last error code (sections 11, 9) remain to be confirmed.
+2. **Deployment baseline.** Exact deployed release commit/tag, binary and last error code (sections 11, 9) remain to be confirmed.
 3. **Re-audit.** Solana Foundation will arrange the re-audit; timing remains to be confirmed. Scope: instructions 6-12 and the migration and rollback properties of section 11.

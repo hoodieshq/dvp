@@ -146,7 +146,7 @@ their temporary accounts. `cleanupSession` in
 `clients/typescript/examples/confidential/send-session.ts` shows this loop.
 
 Client checks throw `ConfidentialError`; branch on its `code`, which mirrors the
-Rust `ConfidentialError` variants (for example `InsufficientAvailable`,
+Rust preflight `ConfidentialError` variants (for example `InsufficientAvailable`,
 `SurplusTooLarge`, `ZeroPartialRefund`, `RecipientNotApproved`,
 `RecipientPendingCounterFull`, `BalanceMismatch`, `IncompleteHistory`). Swap
 decoding keeps `SwapDvpVerificationError`, and proof generation surfaces SDK
@@ -156,7 +156,9 @@ checks do not replace final on-chain validation.
 ## Hooks and recovery
 
 `resolveConfidentialHookAccounts` resolves Token-2022 hook accounts using the
-hidden-amount sentinel and removes signer privileges. Use the wallet authority
+hidden-amount sentinel and removes signer privileges. An absent optional
+validation account yields only the readonly, non-signer hook program account;
+malformed validation data and RPC failures still throw. Use the wallet authority
 for funding and the swap PDA for outgoing escrow transfers. Pass leg A and B
 extras separately; each leg permits at most 32 entries. Settle reuses leg B
 extras for payment and surplus, so destination-dependent accounts must work for
@@ -168,7 +170,9 @@ they fit. For ordinary public transfers, use Token-2022's
 public amount supplied from the token snapshot. `readAvailableBalance` avoids
 decoding unrelated pending funds. AE values are accepted only after checking
 the ElGamal ciphertext; otherwise both readers fall back to verified history.
-If that fallback fails, the thrown error keeps the AE failure as `cause`. A
+If that fallback fails, the thrown error keeps the initial read failure as
+`cause` and the recovery failure's code and message. Rust represents the same
+pair with `BalanceRecoveryFailed { initial, history }`. A
 foreign key throws `EscrowKeyMismatch` without trying history.
 Funding verification rejects false AE rather than silently repairing it.
 
@@ -187,7 +191,10 @@ amount comes from the snapshot, not CT replay. Incomplete history fails.
 Transfer, Deposit, Withdraw, Apply, Empty, ConfidentialMint and ConfidentialBurn
 are supported; confidential TransferWithFee is rejected.
 
-SPL Record writes are replayed automatically. For other proof accounts,
+SPL Record writes are replayed automatically after their initialization is seen.
+Writes to an unrelated pre-existing Record do not block replay. Its contents
+remain unknown until a relevant proof needs them. For those Records and other
+proof accounts,
 `history.push(transaction, resolveProofAccount)` accepts a synchronous callback
 returning full account bytes as they existed at verification. Retain those bytes
 or obtain them from a historical account-data source; normal transaction RPC
@@ -228,7 +235,9 @@ and excluded from the library build.
 `clients/typescript/src/__tests__/confidential/` groups scenarios by instruction and
 covers each lifecycle instruction,
 v0/v1 funding and settlement, auditor and nonzero high limbs, partial/full/None
-refunds, false AE repair from funding history, hooks with memo and interrupted preparation
+refunds, false AE repair from funding history, unrelated Record writes and
+missing initialization with a historical-byte resolver, hooks with or without
+validation accounts, memos and interrupted preparation
 cleanup. Wallets use independent random keys. Shared vectors check deterministic keys
 and ciphertexts, and a Rust-created swap and escrow dump verifies with a
 TypeScript-derived seed. `confidential/verify.test.ts` checks foreign keys and an incorrect

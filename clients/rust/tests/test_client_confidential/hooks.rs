@@ -388,12 +388,11 @@ fn hook_extras_reject_one_account_above_either_leg_limit() {
 }
 
 #[test]
-fn hook_resolver_rejects_missing_validation_account() {
-    assert!(matches!(
-        resolve_hook_accounts(|_| Ok(None)),
-        Err(ConfidentialError::Transaction(message))
-            if message == ProgramError::InvalidAccountData.to_string()
-    ));
+fn hook_resolver_accepts_missing_validation_account() {
+    assert_eq!(
+        resolve_hook_accounts(|_| Ok(None)).unwrap(),
+        vec![AccountMeta::new_readonly(HOOK_FIXTURE_PROGRAM_ID, false)]
+    );
 }
 
 #[test]
@@ -500,4 +499,95 @@ fn refund_with_hook_extras(
     assert!(session.preparation.is_empty());
     assert_eq!(session.final_transaction.instructions.len(), 1);
     Ok(session.final_transaction.instructions.remove(0))
+}
+
+#[test]
+fn hook_without_validation_account_settles() {
+    settle_without_validation_list(false);
+}
+
+#[test]
+fn hook_with_prefunded_validation_pda_settles() {
+    // Anyone can fund the PDA, leaving a System-owned account with no data.
+    settle_without_validation_list(true);
+}
+
+fn settle_without_validation_list(prefund: bool) {
+    let mut context = TestContext::new();
+    let f = ClientFixture::with_hook(&mut context, TransactionFormat::V1, AMOUNT_B, true);
+    let hook = Pubkey::new_unique();
+    context
+        .svm
+        .add_program(
+            hook,
+            include_bytes!("../../../../target/deploy/transfer_hook_fixture.so"),
+        )
+        .unwrap();
+    let validation = get_extra_account_metas_address(&f.dvp.accounts.mint_b, &hook);
+    assert!(context.get_account(&validation).is_none());
+    let update = spl_token_2022_interface::extension::transfer_hook::instruction::update(
+        &TOKEN,
+        &f.dvp.accounts.mint_b,
+        &context.payer.pubkey(),
+        &[],
+        Some(hook),
+    )
+    .unwrap();
+    send_v1(&mut context, &[update], &[]).unwrap();
+    if prefund {
+        let rent = context.svm.minimum_balance_for_rent_exemption(0);
+        let fund = solana_system_interface::instruction::transfer(
+            &context.payer.pubkey(),
+            &validation,
+            rent,
+        );
+        send_v1(&mut context, &[fund], &[]).unwrap();
+        assert!(context.get_account(&validation).unwrap().data.is_empty());
+    }
+    let resolved = futures::executor::block_on(resolve_confidential_hook_accounts(
+        &hook,
+        &f.dvp.accounts.dvp_ata_b,
+        &f.dvp.accounts.mint_b,
+        &f.recipient,
+        &f.dvp.accounts.swap_dvp,
+        |key| std::future::ready(Ok(context.get_account(&key).map(|account| account.data))),
+    ));
+    let extras = resolved.unwrap();
+    assert_eq!(extras, vec![AccountMeta::new_readonly(hook, false)]);
+    let source = f.source(&context);
+    let recipient = state(&context, &f.recipient);
+    let refund = state(&context, &f.refund);
+    let swap = f.swap(&context);
+    let session = settle_session(
+        &f.config,
+        f.settle_accounts(),
+        SettleRequest {
+            source: TransferSource {
+                state: &source,
+                keys: &f.keys,
+                history: &[],
+            },
+            swap: &swap,
+            expected_amount_b: AMOUNT_B,
+            recipient: &recipient,
+            surplus_recipient: &refund,
+            auditor: None,
+        },
+        &[],
+        &extras,
+    )
+    .unwrap();
+    let history = execute(&mut context, &f.config, session, &[&f.dvp.authority]);
+    let hook_calls: Vec<_> = history
+        .iter()
+        .flat_map(|tx| tx.inner_instructions.values())
+        .flatten()
+        .filter(|ix| ix.program_id == hook)
+        .collect();
+    assert_eq!(hook_calls.len(), 1);
+    assert_eq!(hook_calls[0].accounts.len(), 4);
+    assert_eq!(get_token_balance(&context, &f.asset_recipient), AMOUNT_A);
+    assert_eq!(pending(&context, &f.recipient, &f.recipient_keys), AMOUNT_B);
+    assert!(context.get_account(&f.dvp.accounts.swap_dvp).is_none());
+    assert_eq!(context.get_account(&validation).is_some(), prefund);
 }

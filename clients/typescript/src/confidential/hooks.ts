@@ -1,4 +1,8 @@
-import { fetchEncodedAccount, type AccountMeta } from "@solana/kit";
+import {
+  AccountRole,
+  fetchEncodedAccount,
+  type AccountMeta,
+} from "@solana/kit";
 import {
   findExtraAccountMetaListPda,
   resolveExtraAccountMetasForExecute,
@@ -6,7 +10,6 @@ import {
 } from "@solana-program/token-2022";
 import { hookExtras } from "./lifecycle";
 import { U64_MAX } from "./constants";
-import { ConfidentialError } from "./errors";
 
 /** Confidential transfers invoke Execute with the hidden amount sentinel. */
 export async function resolveConfidentialHookAccounts(
@@ -18,10 +21,17 @@ export async function resolveConfidentialHookAccounts(
         { mint: input.mint },
         { programAddress: input.transferHookProgramAddress },
       );
-  // resolveExtraAccountMetasForExecute returns [] for a missing validation account.
+  // Validation is optional, but Token-2022 still needs the hook program account.
+  // Anyone can fund the PDA, so an empty or foreign-owned account means none.
   const account = await fetchEncodedAccount(input.rpc, validation);
-  if (!account.exists)
-    throw new ConfidentialError("Account", "Missing hook validation account");
+  if (
+    !account.exists ||
+    account.data.length === 0 ||
+    account.programAddress !== input.transferHookProgramAddress
+  )
+    return [
+      { address: input.transferHookProgramAddress, role: AccountRole.READONLY },
+    ];
   return hookExtras({
     legB: await resolveExtraAccountMetasForExecute({
       ...input,

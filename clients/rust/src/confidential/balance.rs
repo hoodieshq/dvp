@@ -241,8 +241,15 @@ pub fn read_available_balance(
     keys: &EscrowKeys,
     history: &[BalanceEvent],
 ) -> Result<u64, ConfidentialError> {
-    checked_available_balance(state, keys)
-        .or_else(|_| recover_escrow_balance(state, 0, keys, history).map(|b| b.available))
+    check_escrow_keys(state, keys)?;
+    checked_available_balance(state, keys).or_else(|initial| {
+        recover_escrow_balance(state, 0, keys, history)
+            .map(|b| b.available)
+            .map_err(|history| ConfidentialError::BalanceRecoveryFailed {
+                initial: Box::new(initial),
+                history: Box::new(history),
+            })
+    })
 }
 
 /// Uses AE only after verifying its value against ElGamal. Falls back to history
@@ -254,26 +261,35 @@ pub fn read_escrow_balance(
     history: &[BalanceEvent],
 ) -> Result<EscrowBalance, ConfidentialError> {
     check_escrow_keys(state, keys)?;
-    if let Ok(available) = checked_available_balance(state, keys) {
-        let lo: ElGamalCiphertext = state
-            .pending_balance_lo
-            .try_into()
-            .map_err(|_| ConfidentialError::Account("pending ciphertext"))?;
-        let hi: ElGamalCiphertext = state
-            .pending_balance_hi
-            .try_into()
-            .map_err(|_| ConfidentialError::Account("pending ciphertext"))?;
-        if let (Some(lo), Some(hi)) = (
-            lo.decrypt_u32(keys.elgamal.secret()),
-            hi.decrypt_u32(keys.elgamal.secret()),
-        ) {
-            return Ok(EscrowBalance {
-                available,
-                pending: combine(lo, hi)?,
-                pending_credit_counter: state.pending_balance_credit_counter.into(),
-                public,
-            });
+    let initial = match checked_available_balance(state, keys) {
+        Ok(available) => {
+            let lo: ElGamalCiphertext = state
+                .pending_balance_lo
+                .try_into()
+                .map_err(|_| ConfidentialError::Account("pending ciphertext"))?;
+            let hi: ElGamalCiphertext = state
+                .pending_balance_hi
+                .try_into()
+                .map_err(|_| ConfidentialError::Account("pending ciphertext"))?;
+            if let (Some(lo), Some(hi)) = (
+                lo.decrypt_u32(keys.elgamal.secret()),
+                hi.decrypt_u32(keys.elgamal.secret()),
+            ) {
+                return Ok(EscrowBalance {
+                    available,
+                    pending: combine(lo, hi)?,
+                    pending_credit_counter: state.pending_balance_credit_counter.into(),
+                    public,
+                });
+            }
+            ConfidentialError::IncompleteHistory
         }
-    }
-    recover_escrow_balance(state, public, keys, history)
+        Err(error) => error,
+    };
+    recover_escrow_balance(state, public, keys, history).map_err(|history| {
+        ConfidentialError::BalanceRecoveryFailed {
+            initial: Box::new(initial),
+            history: Box::new(history),
+        }
+    })
 }

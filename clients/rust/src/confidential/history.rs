@@ -218,10 +218,6 @@ impl BalanceHistory {
                         .insert(address, vec![0; RecordData::WRITABLE_START_INDEX]);
                 }
                 RecordInstruction::Write { offset, data } => {
-                    let record = self
-                        .records
-                        .get_mut(&address)
-                        .ok_or(ConfidentialError::IncompleteHistory)?;
                     let start = usize::try_from(offset)
                         .ok()
                         .and_then(|v| v.checked_add(RecordData::WRITABLE_START_INDEX))
@@ -234,6 +230,12 @@ impl BalanceHistory {
                     if end > MAX_RECORD_LEN {
                         return Err(ConfidentialError::IncompleteHistory);
                     }
+                    // A transaction may write an unrelated pre-existing Record.
+                    // Without initialization its bytes remain unknown; resolve
+                    // them only if a later balance proof actually needs them.
+                    let Some(record) = self.records.get_mut(&address) else {
+                        return Ok(());
+                    };
                     record.resize(record.len().max(end), 0);
                     record[start..end].copy_from_slice(data);
                 }

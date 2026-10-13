@@ -230,8 +230,9 @@ pub fn decode_swap_dvp_account(
     verify_swap_dvp_bytes(expected_address, &account.owner, &account.data)
 }
 
-/// Complete funding gate over fetched swap and escrow snapshots. Returns the
-/// checked confidential terms and CT state for the caller's SPL wallet funding.
+/// Check confidential funding state over fetched swap and escrow snapshots.
+/// The caller must also compare the returned public terms with the agreed trade
+/// before SPL wallet funding.
 #[cfg(all(feature = "fetch", feature = "confidential"))]
 pub fn verify_confidential_funding(
     swap_address: &Pubkey,
