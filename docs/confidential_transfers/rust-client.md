@@ -24,6 +24,8 @@ The shared fixtures are in `clients/test-vectors/confidential-amount-b.json`.
 Regenerate them explicitly with
 `cargo test -p dvp-swap-program-client --features confidential --lib regenerate_shared_vectors -- --ignored`.
 Normal tests only read these fixtures.
+See [key management](key-management.md) for the recommended master key setup,
+why the seed is not derived from a wallet signature, and how each party stores it.
 
 Before funding, use `verify::verify_swap_dvp_bytes` (or the `fetch` feature's
 `decode_swap_dvp_account`) to check owner, exact layout, canonical swap PDA and

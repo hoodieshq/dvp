@@ -34,7 +34,9 @@ HMAC-SHA256 callback, allowing the master key to stay in a KMS.
 `EscrowKeys.fromSeed(seed)` derives ElGamal, AE and deterministic low/high
 openings. `keys.encryptAmount(amount)` accepts `1..2^48-1`. Call `keys.free()`
 when finished to release its WASM allocations. Keep signing keys separate from
-the shared seed.
+the shared seed. See [key management](key-management.md) for the recommended
+master key setup, why the seed is not derived from a wallet signature, and how
+each party stores it.
 
 Balance readers accept `ConfidentialAccountKeys`, a pair of
 existing `{ elgamal, ae }` SDK keys. Wallet keys need not share the DvP seed or

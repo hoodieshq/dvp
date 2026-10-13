@@ -19,6 +19,7 @@ The trade lives as a single `SwapDvp` PDA with two associated escrow ATAs (one p
 Confidential leg B is implemented in the program and both clients. Leg A stays
 public; leg B uses Token-2022 Confidential Transfer with an agreed amount below
 `2^48` base units. See the [specification](docs/confidential_transfers/spec.md),
+[key management](docs/confidential_transfers/key-management.md),
 [Rust client guide](docs/confidential_transfers/rust-client.md) and
 [TypeScript client guide](docs/confidential_transfers/typescript-client.md).
 The confidential changes have not been deployed or externally audited.

@@ -74,11 +74,9 @@ const sharedSeed = createHmac("sha256", seedMasterKey)
 
 `seed_master_key` is at least 32 bytes and lives in the operator's KMS/HSM; there the same value is one `GenerateMac` (HMAC-SHA256) call over `tag || swap_dvp`, and the key never leaves the KMS. The snippets take the raw key for clarity; the Rust helper `derive_shared_seed(swap, mac)` takes an HMAC callback instead (section 12).
 
-- `swap_dvp` (the swap's PDA) is known before Create and unique per swap (the nonce tombstone forbids reuse), so each swap gets its own seed without extra state.
-- `seed_master_key` is a dedicated symmetric secret, separate from the `settlement_authority` signing key.
-- One long-lived key re-derives the seed of any swap, so nothing per swap needs a backup (4.6).
-- A leaked `seed_master_key` exposes the amounts of that operator's swaps but cannot move funds; a leaked signing key does not reveal amounts.
-- The operator hands `shared_seed` to `user_a` and `user_b`, and to the settlement authority's operator if that is a different party, over a secure off-chain channel of the integrator's choice (out of scope).
+`swap_dvp` (the swap's PDA) is known before Create and unique per swap (the nonce tombstone forbids reuse). `seed_master_key` is a dedicated symmetric secret, separate from the `settlement_authority` signing key. The operator hands `shared_seed` to `user_a` and `user_b`, and to the settlement authority's operator if that is a different party, over a secure off-chain channel of the integrator's choice (out of scope).
+
+Why this derivation is recommended (and not, for example, one from a wallet signature), how participants store the seed, and what a leak or loss means are in [key-management.md](key-management.md).
 
 Every party checks the seed it received against the chain before depositing (section 4.4).
 
@@ -160,7 +158,7 @@ The clients ship a vectors file (`clients/test-vectors/confidential-amount-b.jso
 
 ### 4.6 Seed loss
 
-If all three parties lose the seed and the operator loses `seed_master_key`, the leg B escrow funds cannot be recovered: no proof can be built. This is a property of CT, not of DvP.
+If all three parties lose the seed and the operator loses `seed_master_key`, the leg B escrow funds cannot be recovered: no proof can be built. This is a property of CT, not of DvP. One long-lived master key re-derives the seed of any swap, so nothing per swap needs a backup ([key-management.md](key-management.md#4-storage-and-handling)).
 
 ## 5. State and account layout
 
@@ -737,6 +735,6 @@ Confidential leg A; the demo application; Mosaic/SDP/Explorer integrations; conf
 
 ## 15. Open questions
 
-1. **Seed derivation.** HMAC under an operator-held master key (4.1) is accepted for this design.
+1. **Seed derivation.** HMAC under an operator-held master key (4.1) is accepted for this design; the rationale is in [key-management.md](key-management.md#3-why-this-derivation).
 2. **Deployment baseline.** Exact deployed release commit/tag, binary and last error code (sections 11, 9) remain to be confirmed.
 3. **Re-audit.** Solana Foundation will arrange the re-audit; timing remains to be confirmed. Scope: instructions 6-12 and the migration and rollback properties of section 11.
