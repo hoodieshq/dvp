@@ -158,7 +158,7 @@ The clients ship a vectors file (`clients/test-vectors/confidential-amount-b.jso
 
 ### 4.6 Seed loss
 
-If all three parties lose the seed and the operator loses `seed_master_key`, the leg B escrow funds cannot be recovered: no proof can be built. This is a property of CT, not of DvP. One long-lived master key re-derives the seed of any swap, so nothing per swap needs a backup ([key-management.md](key-management.md#4-storage-and-handling)).
+Leg B's confidential funds cannot be recovered if no usable seed or escrow-key copy remains and the required keys cannot be reconstructed. Losing one participant's seed copy or the operator's master key alone does not invalidate surviving copies. HMAC avoids separate backups of each secret seed, but operators must preserve the master keys and each swap's key ID/version mapping ([key-management.md](key-management.md#4-storage-and-handling)).
 
 ## 5. State and account layout
 
