@@ -14,7 +14,7 @@ use spl_token_2022_interface::{
         },
         confidential_transfer::instruction::{
             ConfidentialTransferInstruction, DepositInstructionData, TransferInstructionData,
-            WithdrawInstructionData,
+            TransferWithFeeInstructionData, WithdrawInstructionData,
         },
     },
     instruction::TokenInstruction,
@@ -420,25 +420,34 @@ impl BalanceHistory {
             *ix.data.get(1).ok_or(ConfidentialError::IncompleteHistory)?,
         )
         .map_err(|_| ConfidentialError::IncompleteHistory)?;
-        if matches!(kind, ConfidentialTransferInstruction::Transfer) {
+        if matches!(
+            kind,
+            ConfidentialTransferInstruction::Transfer
+                | ConfidentialTransferInstruction::TransferWithFee
+        ) {
             let source = account(ix, 0)?;
             let destination = account(ix, 2)?;
             if source != self.escrow && destination != self.escrow {
                 return Ok(());
             }
-            let data: TransferInstructionData = pod(&ix.data[2..])?;
-            let context = self.transfer_context(
-                ix,
-                index,
-                top,
+            // DvP mints have no TransferFeeConfig. Token-2022 then executes
+            // TransferWithFee as Transfer: same accounts, fee proofs ignored.
+            let offsets = if matches!(kind, ConfidentialTransferInstruction::Transfer) {
+                let data: TransferInstructionData = pod(&ix.data[2..])?;
                 [
                     data.equality_proof_instruction_offset,
                     data.ciphertext_validity_proof_instruction_offset,
                     data.range_proof_instruction_offset,
-                ],
-                3,
-                resolve,
-            )?;
+                ]
+            } else {
+                let data: TransferWithFeeInstructionData = pod(&ix.data[2..])?;
+                [
+                    data.equality_proof_instruction_offset,
+                    data.transfer_amount_ciphertext_validity_proof_instruction_offset,
+                    data.range_proof_instruction_offset,
+                ]
+            };
+            let context = self.transfer_context(ix, index, top, offsets, 3, resolve)?;
             for (address, handle) in [(source, 0), (destination, 1)] {
                 if address != self.escrow {
                     continue;
@@ -466,9 +475,6 @@ impl BalanceHistory {
                 }
                 ConfidentialTransferInstruction::EmptyAccount => {
                     self.events.push(BalanceEvent::Empty)
-                }
-                ConfidentialTransferInstruction::TransferWithFee => {
-                    return Err(ConfidentialError::IncompleteHistory)
                 }
                 _ => {}
             }

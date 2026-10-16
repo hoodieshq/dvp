@@ -3,11 +3,19 @@ import { test } from "node:test";
 import {
   AccountRole,
   generateKeyPairSigner,
+  type Address,
   type Instruction,
 } from "@solana/kit";
 import { ZK_ELGAMAL_PROOF_PROGRAM_ADDRESS } from "@solana-program/zk-elgamal-proof";
 import { ProofKind } from "../../confidential/transaction";
 import { getCreateAccountInstruction } from "@solana-program/system";
+import {
+  getConfidentialTransferInstructionDataDecoder,
+  getConfidentialTransferWithFeeInstructionDataEncoder,
+  identifyToken2022Instruction,
+  Token2022Instruction,
+  TOKEN_2022_PROGRAM_ADDRESS,
+} from "@solana-program/token-2022";
 import {
   RECORD_PROGRAM_ADDRESS,
   RECORD_META_DATA_SIZE,
@@ -212,6 +220,55 @@ test("replay keeps a validity context when a verification omits its authority", 
         recoverEscrowBalance(state, 0n, f.keys, replay.events()).available,
         f.amount,
       );
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test("replay treats TransferWithFee as Transfer in both directions", async () => {
+  const context = new TestContext();
+  const f = await fixture(context, 0);
+  try {
+    const history = await createAndFund(context, f);
+    let transfer: Instruction | undefined;
+    // On a mint without TransferFeeConfig, Token-2022 runs TransferWithFee
+    // with the Transfer accounts and proofs, ignoring the fee offsets.
+    const withFee = history.map((tx) => ({
+      ...tx,
+      instructions: tx.instructions.map((ix) => {
+        if (
+          ix.programAddress !== TOKEN_2022_PROGRAM_ADDRESS ||
+          identifyToken2022Instruction(ix.data!) !==
+            Token2022Instruction.ConfidentialTransfer
+        )
+          return ix;
+        transfer = ix;
+        const data = getConfidentialTransferInstructionDataDecoder().decode(
+          ix.data!,
+        );
+        return {
+          ...ix,
+          data: getConfidentialTransferWithFeeInstructionDataEncoder().encode({
+            ...data,
+            transferAmountCiphertextValidityProofInstructionOffset:
+              data.ciphertextValidityProofInstructionOffset,
+            feeSigmaProofInstructionOffset: 0,
+            feeCiphertextValidityProofInstructionOffset: 0,
+          }),
+        };
+      }),
+    }));
+    assert(transfer);
+    const replay = (escrow: Address, txs: typeof history) => {
+      const result = new BalanceHistory(escrow);
+      for (const tx of txs) result.push(tx);
+      return result.events();
+    };
+    for (const escrow of [transfer.accounts![0]!, transfer.accounts![2]!]) {
+      const expected = replay(escrow.address, history);
+      assert(expected.some((e) => e.kind === "credit" || e.kind === "debit"));
+      assert.deepEqual(replay(escrow.address, withFee), expected);
     }
   } finally {
     f.close();

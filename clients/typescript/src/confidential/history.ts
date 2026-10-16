@@ -14,6 +14,7 @@ import {
   Token2022Instruction,
   TOKEN_2022_PROGRAM_ADDRESS,
   getConfidentialTransferInstructionDataDecoder,
+  getConfidentialTransferWithFeeInstructionDataDecoder,
   getConfidentialMintInstructionDataDecoder,
   getConfidentialBurnInstructionDataDecoder,
   getConfidentialDepositInstructionDataDecoder,
@@ -316,28 +317,39 @@ export class BalanceHistory {
     } catch {
       return;
     }
-    if (kind === Token2022Instruction.ConfidentialTransfer) {
+    if (
+      kind === Token2022Instruction.ConfidentialTransfer ||
+      kind === Token2022Instruction.ConfidentialTransferWithFee
+    ) {
       const source = account(ix, 0),
         destination = account(ix, 2);
       if (source !== this.escrow && destination !== this.escrow) return;
+      // DvP mints have no TransferFeeConfig. Token-2022 then executes
+      // TransferWithFee as Transfer: same accounts, fee proofs ignored.
+      let proofOffsets: number[];
+      if (kind === Token2022Instruction.ConfidentialTransfer)
+        proofOffsets = offsets(
+          getConfidentialTransferInstructionDataDecoder().decode(data),
+        );
+      else {
+        const withFee =
+          getConfidentialTransferWithFeeInstructionDataDecoder().decode(data);
+        proofOffsets = offsets({
+          ...withFee,
+          ciphertextValidityProofInstructionOffset:
+            withFee.transferAmountCiphertextValidityProofInstructionOffset,
+        });
+      }
       const context = this.transferContext(
         ix,
         index,
         top,
-        offsets(getConfidentialTransferInstructionDataDecoder().decode(data)),
+        proofOffsets,
         3,
         resolve,
       );
       if (source === this.escrow) this.amount(context, 0, false);
       if (destination === this.escrow) this.amount(context, 1, true);
-    } else if (
-      kind === Token2022Instruction.ConfidentialTransferWithFee &&
-      (account(ix, 0) === this.escrow || account(ix, 2) === this.escrow)
-    ) {
-      throw new ConfidentialError(
-        "IncompleteHistory",
-        "Confidential TransferWithFee history is unsupported",
-      );
     } else if (
       account(ix, 0) === this.escrow &&
       kind !== Token2022Instruction.ConfidentialMint &&

@@ -193,7 +193,8 @@ Pass `history.events()` to the balance reader or directly to
 available, both pending limbs and the counter against the snapshot. The public
 amount comes from the snapshot, not CT replay. Incomplete history fails.
 Transfer, Deposit, Withdraw, Apply, Empty, ConfidentialMint and ConfidentialBurn
-are supported; confidential TransferWithFee is rejected.
+are supported. Confidential TransferWithFee is replayed as Transfer: DvP mints
+have no TransferFeeConfig, and Token-2022 then ignores the fee proofs.
 
 SPL Record writes are replayed automatically after their initialization is seen.
 Writes to an unrelated pre-existing Record do not block replay. Its contents

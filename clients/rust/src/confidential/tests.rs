@@ -564,6 +564,89 @@ fn validity_verification_without_authority_keeps_the_real_context() {
 }
 
 #[test]
+fn transfer_with_fee_replays_as_transfer_in_both_directions() {
+    use solana_zk_sdk::{
+        encryption::grouped_elgamal::GroupedElGamal,
+        zk_elgamal_proof_program::build_batched_grouped_ciphertext_3_handles_validity_proof_data,
+    };
+    use spl_token_2022_interface::extension::confidential_transfer::instruction::{
+        ConfidentialTransferInstruction, TransferInstructionData, TransferWithFeeInstructionData,
+    };
+    use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+    let keys = [1, 2, 3].map(|seed| EscrowKeys::from_seed(&[seed; 32]).unwrap());
+    let pubkeys = [0, 1, 2].map(|i| keys[i].elgamal.pubkey());
+    let grouped_lo = GroupedElGamal::encrypt_with(pubkeys, 42u64, &keys[1].opening_lo);
+    let grouped_hi = GroupedElGamal::encrypt_with(pubkeys, 3u64, &keys[1].opening_hi);
+    let proof = build_batched_grouped_ciphertext_3_handles_validity_proof_data(
+        pubkeys[0],
+        pubkeys[1],
+        pubkeys[2],
+        &grouped_lo,
+        &grouped_hi,
+        42,
+        3,
+        &keys[1].opening_lo,
+        &keys[1].opening_hi,
+    )
+    .unwrap();
+    let (source, destination) = (Pubkey::new_unique(), Pubkey::new_unique());
+    let transfer =
+        spl_token_2022_interface::extension::confidential_transfer::instruction::transfer(
+            &spl_token_2022_interface::ID,
+            &source,
+            &Pubkey::new_unique(),
+            &destination,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Pubkey::new_unique(),
+            &[],
+            ProofLocation::ContextStateAccount(&Pubkey::new_unique()),
+            ProofLocation::InstructionOffset(std::num::NonZeroI8::new(1).unwrap(), &proof),
+            ProofLocation::ContextStateAccount(&Pubkey::new_unique()),
+        )
+        .unwrap();
+    // On a mint without TransferFeeConfig, Token-2022 runs TransferWithFee
+    // with the Transfer accounts and proofs, ignoring the fee offsets.
+    let mut with_fee = transfer.clone();
+    let token = with_fee.iter_mut().find(|ix| ix.data.len() > 2).unwrap();
+    let data: TransferInstructionData = *bytemuck::from_bytes(&token.data[2..]);
+    token.data = vec![
+        token.data[0],
+        ConfidentialTransferInstruction::TransferWithFee as u8,
+    ];
+    token
+        .data
+        .extend_from_slice(bytemuck::bytes_of(&TransferWithFeeInstructionData {
+            new_source_decryptable_available_balance: data.new_source_decryptable_available_balance,
+            transfer_amount_auditor_ciphertext_lo: data.transfer_amount_auditor_ciphertext_lo,
+            transfer_amount_auditor_ciphertext_hi: data.transfer_amount_auditor_ciphertext_hi,
+            equality_proof_instruction_offset: data.equality_proof_instruction_offset,
+            transfer_amount_ciphertext_validity_proof_instruction_offset: data
+                .ciphertext_validity_proof_instruction_offset,
+            fee_sigma_proof_instruction_offset: 0,
+            fee_ciphertext_validity_proof_instruction_offset: 0,
+            range_proof_instruction_offset: data.range_proof_instruction_offset,
+        }));
+    let replay = |escrow: Pubkey, instructions: &Vec<Instruction>| {
+        let mut history = BalanceHistory::new(escrow);
+        history
+            .push(&ExecutedTransaction {
+                instructions: instructions.clone(),
+                inner_instructions: Default::default(),
+                succeeded: true,
+            })
+            .unwrap();
+        format!("{:?}", history.events())
+    };
+    for escrow in [source, destination] {
+        let expected = replay(escrow, &transfer);
+        assert_ne!(expected, "[]");
+        assert_eq!(replay(escrow, &with_fee), expected);
+    }
+}
+
+#[test]
 fn v1_rejects_too_many_addresses_before_signing() {
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;

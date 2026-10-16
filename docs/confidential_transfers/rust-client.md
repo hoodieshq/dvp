@@ -139,7 +139,8 @@ Replay incoming transfers and ConfidentialMint into pending low/high balances,
 outgoing transfers and ConfidentialBurn out of available, and Apply into available.
 Deposit adds public tokens to pending; Withdraw subtracts from available. Configure
 resets the replayed event list, and Empty requires the reconstructed CT balance
-to be zero. Confidential TransferWithFee is unsupported and returns an error.
+to be zero. Confidential TransferWithFee is replayed as Transfer. DvP mints have
+no TransferFeeConfig, and Token-2022 then ignores the fee proofs.
 SPL Record bytes survive CloseAccount until the end of that transaction, matching
 runtime behavior; a later initialization at the same address starts fresh.
 Transfer amounts come from the escrow's source/destination handles in the
