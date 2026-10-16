@@ -59,6 +59,10 @@ pub const SWAP_DVP_SEED: &[u8] = b"dvp";
 pub const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
     pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
+/// Token programs the DvP program accepts for either leg.
+const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_2022_PROGRAM_ID: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+
 /// Why a fetched account was rejected as a canonical `SwapDvp`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SwapDvpVerifyError {
@@ -206,6 +210,14 @@ pub fn verify_swap_dvp_bytes(
     };
     let dvp = state.base();
 
+    for (leg, program) in [("A", &dvp.token_program_a), ("B", &dvp.token_program_b)] {
+        if *program != SPL_TOKEN_PROGRAM_ID && *program != TOKEN_2022_PROGRAM_ID {
+            return Err(SwapDvpVerifyError::Malformed(format!(
+                "unsupported token program {leg}: {program}"
+            )));
+        }
+    }
+
     let (expected_pda, _bump) = find_swap_dvp_address(
         &dvp.settlement_authority,
         &dvp.user_a,
@@ -315,8 +327,8 @@ mod tests {
             mint_a: Pubkey::new_from_array([3u8; 32]),
             mint_b: Pubkey::new_from_array([4u8; 32]),
             settlement_authority: Pubkey::new_from_array([5u8; 32]),
-            token_program_a: Pubkey::new_from_array([6u8; 32]),
-            token_program_b: Pubkey::new_from_array([7u8; 32]),
+            token_program_a: SPL_TOKEN_PROGRAM_ID,
+            token_program_b: TOKEN_2022_PROGRAM_ID,
             amount_a: 1_000,
             amount_b: 2_500,
             expiry_timestamp: 1_780_000_000,
@@ -441,6 +453,30 @@ mod tests {
         let err =
             verify_swap_dvp_bytes(&wrong, &DVP_SWAP_PROGRAM_ID, &on_chain_bytes(&dvp)).unwrap_err();
         assert!(matches!(err, SwapDvpVerifyError::WrongAddress { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_unsupported_token_programs() {
+        for leg_b in [false, true] {
+            let mut dvp = sample();
+            let fake = Pubkey::new_from_array([6u8; 32]);
+            if leg_b {
+                dvp.token_program_b = fake;
+            } else {
+                dvp.token_program_a = fake;
+            }
+            let (addr, _) = find_swap_dvp_address(
+                &dvp.settlement_authority,
+                &dvp.user_a,
+                &dvp.user_b,
+                &dvp.mint_a,
+                &dvp.mint_b,
+                dvp.nonce,
+            );
+            let err = verify_swap_dvp_bytes(&addr, &DVP_SWAP_PROGRAM_ID, &on_chain_bytes(&dvp))
+                .unwrap_err();
+            assert!(matches!(err, SwapDvpVerifyError::Malformed(_)));
+        }
     }
 
     #[test]

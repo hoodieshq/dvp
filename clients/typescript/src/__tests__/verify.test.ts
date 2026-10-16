@@ -26,12 +26,17 @@ import {
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111" as Address;
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address;
+const TOKEN_2022_PROGRAM =
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" as Address;
 
 /** Dummy pubkey made of a single byte repeated 32 times. */
 const addressOf = (fill: number) =>
   getAddressDecoder().decode(new Uint8Array(32).fill(fill));
 
-const validData = () =>
+const validData = (
+  tokenProgramA: Address = TOKEN_PROGRAM,
+  tokenProgramB: Address = TOKEN_2022_PROGRAM,
+) =>
   new Uint8Array(
     getSwapDvpEncoder().encode({
       bump: 254,
@@ -40,8 +45,8 @@ const validData = () =>
       mintA: addressOf(3),
       mintB: addressOf(4),
       settlementAuthority: addressOf(5),
-      tokenProgramA: addressOf(6),
-      tokenProgramB: addressOf(7),
+      tokenProgramA,
+      tokenProgramB,
       amountA: 1_000n,
       amountB: 2_500n,
       expiryTimestamp: 1_780_000_000n,
@@ -113,6 +118,18 @@ describe("decodeSwapDvpChecked", () => {
         ),
       /partial snapshot/,
     );
+  });
+
+  it("rejects a token program other than SPL Token or Token-2022", () => {
+    for (const data of [
+      validData(addressOf(6)),
+      validData(TOKEN_PROGRAM, addressOf(7)),
+    ]) {
+      assert.throws(
+        () => decodeSwapDvpChecked(encodedAccount({ data })),
+        /Unsupported token program/,
+      );
+    }
   });
 
   it("rejects a missing account", () => {

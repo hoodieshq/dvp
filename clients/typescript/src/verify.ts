@@ -56,6 +56,12 @@ export const SWAP_DVP_SEED = "dvp";
 export const ASSOCIATED_TOKEN_PROGRAM_ADDRESS =
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" as Address;
 
+/** Token programs the DvP program accepts for either leg. */
+const SUPPORTED_TOKEN_PROGRAMS: readonly Address[] = [
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address,
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" as Address,
+];
+
 export class SwapDvpVerificationError extends Error {
   constructor(message: string) {
     super(message);
@@ -113,6 +119,15 @@ export function decodeSwapDvpChecked<TAddress extends string = string>(
     { ...account, data: account.data.slice(0, SWAP_DVP_ACCOUNT_SIZE) },
     getSwapDvpDecoder(),
   );
+  for (const [leg, program] of [
+    ["A", decoded.data.tokenProgramA],
+    ["B", decoded.data.tokenProgramB],
+  ] as const) {
+    if (!SUPPORTED_TOKEN_PROGRAMS.includes(program))
+      throw new SwapDvpVerificationError(
+        `Unsupported token program ${leg}: ${program}`,
+      );
+  }
   if (account.data.length === SWAP_DVP_ACCOUNT_SIZE) {
     return { ...decoded, data: { ...decoded.data, mode: "public" } };
   }
