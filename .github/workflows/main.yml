@@ -64,16 +64,16 @@ jobs:
       # Integration tests embed these binaries at compile time.
       - name: Rust client feature combinations
         run: |
-          cargo check -p dvp-swap-program-client --no-default-features
-          cargo check -p dvp-swap-program-client --no-default-features --features fetch
-          cargo check -p dvp-swap-program-client --no-default-features --features confidential
-          cargo check -p dvp-swap-program-client --no-default-features --features confidential,fetch --example confidential
+          cargo check -p dvp-swap-program-client --locked --no-default-features
+          cargo check -p dvp-swap-program-client --locked --no-default-features --features fetch
+          cargo check -p dvp-swap-program-client --locked --no-default-features --features confidential
+          cargo check -p dvp-swap-program-client --locked --no-default-features --features confidential,fetch --example confidential
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test
         env:
           RUST_LOG: error
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
