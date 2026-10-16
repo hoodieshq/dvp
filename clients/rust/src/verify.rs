@@ -167,6 +167,10 @@ pub fn find_swap_dvp_escrow_ata(
 /// Verifies raw account fields (owner, size, layout, canonical PDA) and
 /// returns the decoded mode and terms. Core used by `decode_swap_dvp_account`;
 /// available without the `fetch` feature.
+///
+/// `data` must be the full account data. Do not pass data fetched with an
+/// RPC `data_slice`: a 458-byte prefix of a confidential account decodes as
+/// public.
 pub fn verify_swap_dvp_bytes(
     expected_address: &Pubkey,
     owner: &Pubkey,

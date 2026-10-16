@@ -30,6 +30,8 @@ why the seed is not derived from a wallet signature, and how each party stores i
 Before funding, use `verify::verify_swap_dvp_bytes` (or the `fetch` feature's
 `decode_swap_dvp_account`) to check owner, exact layout, canonical swap PDA and
 the confidential amount sentinel.
+Pass the full account data: a `data_slice` prefix of a confidential account
+has the public layout and decodes as `Public`.
 The result is `SwapDvpAccount::Public` or `SwapDvpAccount::Confidential`; the
 confidential base's `amount_b` is a sentinel. These decoders now return
 `SwapDvpAccount` instead of `SwapDvp`; existing public-only callers should match

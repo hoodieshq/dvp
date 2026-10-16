@@ -58,6 +58,7 @@ const validData = () =>
 function encodedAccount(overrides: {
   programAddress?: Address;
   data?: Uint8Array;
+  space?: bigint;
   exists?: boolean;
 }): MaybeEncodedAccount {
   return {
@@ -68,7 +69,7 @@ function encodedAccount(overrides: {
     data: overrides.data ?? validData(),
     executable: false,
     lamports: 1_000_000n,
-    space: BigInt((overrides.data ?? validData()).length),
+    space: overrides.space ?? BigInt((overrides.data ?? validData()).length),
   } as MaybeEncodedAccount;
 }
 
@@ -98,6 +99,19 @@ describe("decodeSwapDvpChecked", () => {
           encodedAccount({ data: validData().slice(0, 450) }),
         ),
       /458|size|length/i,
+    );
+  });
+
+  it("rejects a sliced confidential account instead of decoding it as public", () => {
+    assert.throws(
+      () =>
+        decodeSwapDvpChecked(
+          encodedAccount({
+            data: validData(),
+            space: BigInt(CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE),
+          }),
+        ),
+      /partial snapshot/,
     );
   });
 

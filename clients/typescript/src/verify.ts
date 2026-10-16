@@ -92,6 +92,13 @@ export function decodeSwapDvpChecked<TAddress extends string = string>(
     );
   }
 
+  if (account.space !== BigInt(account.data.length)) {
+    throw new SwapDvpVerificationError(
+      `Account ${account.address} has ${account.data.length} bytes of data ` +
+        `but ${account.space} bytes of space; refusing a partial snapshot.`,
+    );
+  }
+
   if (
     account.data.length !== SWAP_DVP_ACCOUNT_SIZE &&
     account.data.length !== CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE
