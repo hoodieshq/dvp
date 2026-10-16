@@ -35,7 +35,9 @@ has the public layout and decodes as `Public`.
 The result is `SwapDvpAccount::Public` or `SwapDvpAccount::Confidential`; the
 confidential base's `amount_b` is a sentinel. These decoders now return
 `SwapDvpAccount` instead of `SwapDvp`; existing public-only callers should match
-`Public` or use `base()` when they need only common fields. Use `read_escrow_account` to check
+`Public` or use `public()`, which returns `None` for a confidential swap.
+`base()` returns common fields for both modes and must not drive funding
+decisions for confidential swaps. Use `read_escrow_account` to check
 the Token-2022 owner, canonical ATA, token authority and mint. Then call
 `verify_confidential_swap` with the agreed amount and derived keys. It checks the
 escrow key first (`EscrowKeyMismatch`), then the amount ciphertexts

@@ -50,6 +50,16 @@ impl SwapDvpAccount {
             Self::Confidential(state) => &state.base,
         }
     }
+
+    /// Terms of a public swap, or `None` for a confidential one. Use this,
+    /// not [`Self::base`], when a public-only integration decides whether to
+    /// fund.
+    pub fn public(&self) -> Option<&SwapDvp> {
+        match self {
+            Self::Public(base) => Some(base),
+            Self::Confidential(_) => None,
+        }
+    }
 }
 
 /// Seed prefix for the `SwapDvp` PDA (matches `SWAP_DVP_SEED` on-chain).
@@ -492,6 +502,7 @@ mod tests {
         );
         let parsed =
             verify_swap_dvp_bytes(&addr, &DVP_SWAP_PROGRAM_ID, &on_chain_bytes(&dvp)).unwrap();
+        assert_eq!(parsed.public(), Some(&dvp));
         assert_eq!(parsed, SwapDvpAccount::Public(dvp));
     }
 
@@ -516,8 +527,10 @@ mod tests {
         let mut data = on_chain_bytes(&base);
         data.extend_from_slice(&amount.lo);
         data.extend_from_slice(&amount.hi);
+        let parsed = verify_swap_dvp_bytes(&address, &DVP_SWAP_PROGRAM_ID, &data).unwrap();
+        assert_eq!(parsed.public(), None);
         assert_eq!(
-            verify_swap_dvp_bytes(&address, &DVP_SWAP_PROGRAM_ID, &data).unwrap(),
+            parsed,
             SwapDvpAccount::Confidential(ConfidentialSwapDvp {
                 base: base.clone(),
                 amount_b: amount

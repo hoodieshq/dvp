@@ -49,6 +49,8 @@ and the confidential amount sentinel. `verifySwapDvp` additionally checks the
 canonical PDA. The returned account data preserves the common generated fields
 and adds `mode`; confidential data also has `confidential.base` and
 `confidential.amountB`. The base's `amountB` is a sentinel, not the price.
+The common fields are present in both modes, so a public-only integration must
+check `mode === "public"` before using them for a funding decision.
 `fetchSwapDvpAccounts` discovers both account sizes and checks their PDAs. It skips
 accounts with invalid data or a noncanonical address; RPC failures still propagate.
 
