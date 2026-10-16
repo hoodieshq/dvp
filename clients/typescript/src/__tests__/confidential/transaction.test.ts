@@ -2,13 +2,27 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   address,
+  appendTransactionMessageInstruction,
   blockhash,
+  createTransactionMessage,
   generateKeyPairSigner,
+  getBase64EncodedWireTransaction,
   getTransactionMessageComputeUnitPrice,
   getTransactionMessagePriorityFeeLamports,
   getTransactionMessageSizeLimit,
+  pipe,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+  type Address,
+  type Base58EncodedBytes,
 } from "@solana/kit";
-import { PlannedTransaction, type SessionConfig } from "../../confidential";
+import {
+  executedTransactionFromRpc,
+  PlannedTransaction,
+  type RpcTransaction,
+  type SessionConfig,
+} from "../../confidential";
 import { U64_MAX } from "../../confidential/constants";
 
 const lifetime = {
@@ -73,3 +87,63 @@ for (const format of [1, 0] as const) {
     }
   });
 }
+
+test("RPC history rejects loaded addresses on legacy and v1 messages", async () => {
+  const payer = await generateKeyPairSigner();
+  const memo = {
+    programAddress: address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+    data: new Uint8Array(1),
+  };
+  const legacy = await signTransactionMessageWithSigners(
+    pipe(
+      createTransactionMessage({ version: "legacy" }),
+      (m) => setTransactionMessageFeePayerSigner(payer, m),
+      (m) => setTransactionMessageLifetimeUsingBlockhash(lifetime, m),
+      (m) => appendTransactionMessageInstruction(memo, m),
+    ),
+  );
+  const v1 = await new PlannedTransaction([memo]).sign(
+    { payer, format: 1, minimumBalanceForRentExemption: () => 0n },
+    lifetime,
+  );
+  const injected = (await generateKeyPairSigner()).address;
+  for (const transaction of [legacy, v1]) {
+    const rpc = (
+      writable: Address[],
+      innerInstructions: NonNullable<
+        RpcTransaction["meta"]
+      >["innerInstructions"],
+    ): RpcTransaction => ({
+      transaction: [getBase64EncodedWireTransaction(transaction), "base64"],
+      meta: {
+        err: null,
+        loadedAddresses: { writable, readonly: [] },
+        innerInstructions,
+      },
+    });
+    assert.equal(executedTransactionFromRpc(rpc([], [])).succeeded, true);
+    // Index 2 is past the payer and memo program, so only the injected
+    // address could resolve it.
+    assert.throws(
+      () =>
+        executedTransactionFromRpc(
+          rpc(
+            [injected],
+            [
+              {
+                index: 0,
+                instructions: [
+                  {
+                    programIdIndex: 1,
+                    accounts: [2],
+                    data: "" as Base58EncodedBytes,
+                  },
+                ],
+              },
+            ],
+          ),
+        ),
+      { code: "IncompleteHistory" },
+    );
+  }
+});

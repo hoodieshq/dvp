@@ -74,8 +74,18 @@ export function executedTransactionFromRpc(
       "IncompleteHistory",
       "Missing inner instruction metadata",
     );
-  const { compiledMessage: message, loadedAddresses: loaded } =
+  const { compiledMessage: message, loadedAddresses: decoded } =
     decodeTransactionFromRpcResponse(value);
+  // Only v0 messages load lookup addresses; Kit appends them for any version.
+  const loaded = message.version === 0 ? decoded : undefined;
+  if (
+    message.version !== 0 &&
+    ((decoded?.writable.length ?? 0) > 0 || (decoded?.readonly.length ?? 0) > 0)
+  )
+    throw new ConfidentialError(
+      "IncompleteHistory",
+      "Unexpected lookup addresses",
+    );
   if (message.version === 0) {
     const writable =
       message.addressTableLookups?.reduce(
