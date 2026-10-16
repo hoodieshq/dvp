@@ -254,7 +254,12 @@ impl BalanceHistory {
                 // storage. Fail only if a balance operation needs that context.
                 let context = self.validity(ix, resolve).ok();
                 let context_index = usize::from(ix.data.len() == 1 + core::mem::size_of::<u32>());
-                if let Some(meta) = ix.accounts.get(context_index) {
+                // The proof program creates a context only when its authority
+                // follows it; otherwise the verification leaves contexts as is.
+                if let (Some(meta), Some(_authority)) = (
+                    ix.accounts.get(context_index),
+                    ix.accounts.get(context_index + 1),
+                ) {
                     self.contexts.insert(meta.pubkey, context);
                 }
             } else if ix.data.first() == Some(&(ProofInstruction::CloseContextState as u8)) {

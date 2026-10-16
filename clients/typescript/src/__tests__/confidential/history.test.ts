@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AccountRole, generateKeyPairSigner } from "@solana/kit";
+import {
+  AccountRole,
+  generateKeyPairSigner,
+  type Instruction,
+} from "@solana/kit";
 import { ZK_ELGAMAL_PROOF_PROGRAM_ADDRESS } from "@solana-program/zk-elgamal-proof";
 import { ProofKind } from "../../confidential/transaction";
 import { getCreateAccountInstruction } from "@solana-program/system";
@@ -140,3 +144,76 @@ for (const format of [0, 1] as const) {
     }
   });
 }
+
+test("replay keeps a validity context when a verification omits its authority", async () => {
+  const context = new TestContext();
+  const f = await fixture(context, 0);
+  try {
+    const history = await createAndFund(context, f);
+    const state = f.state(f.common.dvpAtaB);
+    const record = (await generateKeyPairSigner()).address;
+    let forgedRecord: Uint8Array | undefined;
+    // Without the authority account the proof program verifies and creates
+    // nothing, so a forged proof naming the real context must not replace it.
+    const poisons = [
+      (ix: Instruction, forged: Uint8Array): Instruction => ({
+        ...ix,
+        data: forged,
+        accounts: [ix.accounts![0]!],
+      }),
+      (ix: Instruction, forged: Uint8Array): Instruction => {
+        forgedRecord = new Uint8Array(
+          Number(RECORD_META_DATA_SIZE) + forged.length - 1,
+        );
+        forgedRecord.set(forged.slice(1), Number(RECORD_META_DATA_SIZE));
+        const data = new Uint8Array(5);
+        data[0] = ProofKind.GroupedValidity;
+        new DataView(data.buffer).setUint32(
+          1,
+          Number(RECORD_META_DATA_SIZE),
+          true,
+        );
+        return {
+          ...ix,
+          data,
+          accounts: [
+            { address: record, role: AccountRole.READONLY },
+            ix.accounts![0]!,
+          ],
+        };
+      },
+    ];
+    for (const poison of poisons) {
+      let injected = 0;
+      const poisoned = history.map((tx) => ({
+        ...tx,
+        instructions: tx.instructions.flatMap((ix) => {
+          if (
+            ix.programAddress !== ZK_ELGAMAL_PROOF_PROGRAM_ADDRESS ||
+            ix.data?.[0] !== ProofKind.GroupedValidity ||
+            ix.data.length === 5 ||
+            (ix.accounts?.length ?? 0) < 2
+          )
+            return [ix];
+          injected++;
+          const forged = new Uint8Array(ix.data);
+          // Corrupt the first grouped ciphertext after the three public keys.
+          forged[1 + 3 * 32]! ^= 1;
+          return [ix, poison(ix, forged)];
+        }),
+      }));
+      assert(injected > 0);
+      const replay = new BalanceHistory(f.common.dvpAtaB);
+      for (const tx of poisoned)
+        replay.push(tx, (ix) =>
+          ix.accounts?.[0]?.address === record ? forgedRecord : undefined,
+        );
+      assert.equal(
+        recoverEscrowBalance(state, 0n, f.keys, replay.events()).available,
+        f.amount,
+      );
+    }
+  } finally {
+    f.close();
+  }
+});

@@ -186,9 +186,11 @@ export class BalanceHistory {
         } else if (ix.programAddress === ZK_ELGAMAL_PROOF_PROGRAM_ADDRESS) {
           if (data[0] === ProofKind.GroupedValidity) {
             const proof = getVerifyProofInstructionDataDecoder().decode(data);
-            const context =
-              ix.accounts?.[proof.offset === undefined ? 0 : 1]?.address;
-            if (context) {
+            const contextIndex = proof.offset === undefined ? 0 : 1;
+            const context = ix.accounts?.[contextIndex]?.address;
+            // The proof program creates a context only when its authority
+            // follows it; otherwise the verification leaves contexts as is.
+            if (context && ix.accounts?.[contextIndex + 1]) {
               try {
                 this.contexts.set(context, this.validity(ix, resolve));
               } catch {

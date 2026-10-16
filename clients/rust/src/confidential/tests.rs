@@ -450,6 +450,120 @@ fn history_decodes_inline_and_record_validity_proofs() {
 }
 
 #[test]
+fn validity_verification_without_authority_keeps_the_real_context() {
+    use solana_instruction::AccountMeta;
+    use solana_zk_elgamal_proof_interface::instruction::{ContextStateInfo, ProofInstruction};
+    use solana_zk_sdk::{
+        encryption::grouped_elgamal::GroupedElGamal,
+        zk_elgamal_proof_program::build_batched_grouped_ciphertext_3_handles_validity_proof_data,
+    };
+    use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+    let proof = |keys: [&EscrowKeys; 3], lo: u64, hi: u64| {
+        let pubkeys = keys.map(|k| k.elgamal.pubkey());
+        let grouped_lo = GroupedElGamal::encrypt_with(pubkeys, lo, &keys[1].opening_lo);
+        let grouped_hi = GroupedElGamal::encrypt_with(pubkeys, hi, &keys[1].opening_hi);
+        let data = build_batched_grouped_ciphertext_3_handles_validity_proof_data(
+            pubkeys[0],
+            pubkeys[1],
+            pubkeys[2],
+            &grouped_lo,
+            &grouped_hi,
+            lo,
+            hi,
+            &keys[1].opening_lo,
+            &keys[1].opening_hi,
+        )
+        .unwrap();
+        (data, grouped_lo, grouped_hi)
+    };
+    let keys = EscrowKeys::from_seed(&[2; 32]).unwrap();
+    let (real, grouped_lo, grouped_hi) = proof(
+        [
+            &EscrowKeys::from_seed(&[1; 32]).unwrap(),
+            &keys,
+            &EscrowKeys::from_seed(&[3; 32]).unwrap(),
+        ],
+        42,
+        3,
+    );
+    let attacker = EscrowKeys::from_seed(&[4; 32]).unwrap();
+    let (forged, _, _) = proof([&attacker, &attacker, &attacker], 7, 1);
+    let escrow = Pubkey::new_unique();
+    let authority = Pubkey::new_unique();
+    let equality = Pubkey::new_unique();
+    let validity = Pubkey::new_unique();
+    let range = Pubkey::new_unique();
+    let record = Pubkey::new_unique();
+    let verify = ProofInstruction::VerifyBatchedGroupedCiphertext3HandlesValidity;
+    // Without the authority account the proof program verifies and creates
+    // nothing, so these must not replace the real context.
+    let mut inline = verify.encode_verify_proof(None, &forged);
+    inline.accounts.push(AccountMeta::new(validity, false));
+    let mut from_record = verify.encode_verify_proof_from_account(
+        None,
+        &record,
+        spl_record::state::RecordData::WRITABLE_START_INDEX as u32,
+    );
+    from_record.accounts.push(AccountMeta::new(validity, false));
+    let state = ConfidentialTransferAccount {
+        elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
+        pending_balance_lo: grouped_lo.to_elgamal_ciphertext(1).unwrap().into(),
+        pending_balance_hi: grouped_hi.to_elgamal_ciphertext(1).unwrap().into(),
+        pending_balance_credit_counter: 1.into(),
+        decryptable_available_balance: keys.ae.encrypt(0).into(),
+        ..Default::default()
+    };
+    for poison in [inline, from_record] {
+        let mut instructions = vec![verify.encode_verify_proof(
+            Some(ContextStateInfo {
+                context_state_account: &validity,
+                context_state_authority: &authority,
+            }),
+            &real,
+        )];
+        instructions.push(poison);
+        instructions.extend(
+            spl_token_2022_interface::extension::confidential_transfer::instruction::transfer(
+                &spl_token_2022_interface::ID,
+                &Pubkey::new_unique(),
+                &Pubkey::new_unique(),
+                &escrow,
+                &Default::default(),
+                &Default::default(),
+                &Default::default(),
+                &authority,
+                &[],
+                ProofLocation::ContextStateAccount(&equality),
+                ProofLocation::ContextStateAccount(&validity),
+                ProofLocation::ContextStateAccount(&range),
+            )
+            .unwrap(),
+        );
+        let mut history = BalanceHistory::new(escrow);
+        history
+            .push_with_proof_accounts(
+                &ExecutedTransaction {
+                    instructions,
+                    inner_instructions: Default::default(),
+                    succeeded: true,
+                },
+                |_| {
+                    let mut data = vec![0; spl_record::state::RecordData::WRITABLE_START_INDEX];
+                    data.extend_from_slice(bytemuck::bytes_of(&forged));
+                    Some(data)
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            recover_escrow_balance(&state, 0, &keys, history.events())
+                .unwrap()
+                .pending,
+            (3 << AMOUNT_LO_BITS) + 42
+        );
+    }
+}
+
+#[test]
 fn v1_rejects_too_many_addresses_before_signing() {
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
