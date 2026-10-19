@@ -232,6 +232,72 @@ fn history_skips_failed_transactions_and_rejects_missing_context() {
 }
 
 #[test]
+fn apply_with_history_rejects_a_snapshot_that_history_contradicts() {
+    use crate::generated::instructions::{
+        ApplyConfidentialDvp, ApplyConfidentialDvpInstructionArgs,
+    };
+    let keys = EscrowKeys::from_seed(&[6; 32]).unwrap();
+    let encrypt = |amount: u64| -> solana_zk_sdk_pod::encryption::elgamal::PodElGamalCiphertext {
+        keys.elgamal.pubkey().encrypt(amount).into()
+    };
+    let snapshot = |available: u64, pending: u64, counter: u64| ConfidentialTransferAccount {
+        elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
+        available_balance: encrypt(available),
+        decryptable_available_balance: keys.ae.encrypt(available).into(),
+        pending_balance_lo: encrypt(pending),
+        pending_balance_hi: encrypt(0),
+        pending_balance_credit_counter: counter.into(),
+        ..Default::default()
+    };
+    let apply = |state: &ConfidentialTransferAccount, history: &[BalanceEvent]| {
+        let pubkey = Pubkey::new_unique();
+        apply_session(
+            &SessionConfig::new(pubkey, TransactionFormat::V1, Default::default()),
+            &ApplyConfidentialDvp {
+                signer: pubkey,
+                swap_dvp: pubkey,
+                nonce_tombstone: pubkey,
+                dvp_ata_b: pubkey,
+                token_program: spl_token_2022_interface::ID,
+            },
+            ApplyConfidentialDvpInstructionArgs {
+                expected_pending_balance_credit_counter: 0,
+                new_decryptable_available_balance: [0; 36],
+                settlement_authority: pubkey,
+                user_a: pubkey,
+                user_b: pubkey,
+                mint_a: pubkey,
+                mint_b: pubkey,
+                nonce: 0,
+            },
+            TransferSource {
+                state,
+                keys: &keys,
+                history,
+            },
+        )
+    };
+    // A consistent snapshot passes the fast path, but supplied history wins:
+    // forged pending limbs (DVP-9) and a replayed zero available balance
+    // (DVP-19) must both be rejected.
+    let forged_pending = snapshot(0, 7, 1);
+    assert!(apply(&forged_pending, &[]).is_ok());
+    assert!(apply(&forged_pending, &[BalanceEvent::Deposit(7)]).is_ok());
+    assert!(matches!(
+        apply(&forged_pending, &[BalanceEvent::Deposit(5)]),
+        Err(ConfidentialError::IncompleteHistory)
+    ));
+    let replayed_zero = snapshot(0, 0, 0);
+    assert!(matches!(
+        apply(
+            &replayed_zero,
+            &[BalanceEvent::Deposit(5), BalanceEvent::Apply]
+        ),
+        Err(ConfidentialError::IncompleteHistory)
+    ));
+}
+
+#[test]
 fn oversized_plan_returns_an_error() {
     let config = SessionConfig::new(
         Pubkey::new_unique(),

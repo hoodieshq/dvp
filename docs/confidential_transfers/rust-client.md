@@ -176,7 +176,9 @@ incomplete history, arithmetic overflow and mismatches return errors. An AE
 value is a fast path only after the same ElGamal check; AE authentication alone
 is not evidence that the number is correct. Outgoing builders use
 `read_available_balance` and do not decode unrelated pending credits when AE is
-correct. Apply uses the full balance reader. Funding verification deliberately
+correct. Apply uses the full balance reader; with non-empty history it rebuilds
+the balance from history and requires the snapshot to match, because the program
+does not check the AE that Apply writes. Funding verification deliberately
 rejects false AE; repair it with a verified Apply before funding.
 
 If both the initial balance read and history recovery fail,

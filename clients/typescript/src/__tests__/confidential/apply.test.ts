@@ -108,3 +108,57 @@ test("recover a false AE value from funding history and repair it with Apply", a
     f.close();
   }
 });
+
+test("Apply with history rejects a snapshot that history contradicts", async () => {
+  const context = new TestContext(),
+    f = await fixture(context, 1);
+  try {
+    const history = await createAndFund(context, f);
+    const replay = new BalanceHistory(f.common.dvpAtaB);
+    for (const tx of history) replay.push(tx);
+    const real = f.state(f.common.dvpAtaB);
+    const pubkey = f.keys.elgamal.pubkey(),
+      zero = pubkey.encryptU64(0n),
+      seven = pubkey.encryptU64(7n),
+      zeroAe = f.keys.ae.encrypt(0n);
+    try {
+      // Each snapshot is self-consistent and passes the fast path, but
+      // supplied history wins: forged pending limbs (DVP-9) and a replayed
+      // zero available balance (DVP-19) must both be rejected.
+      const forgedPending = {
+        ...real,
+        pendingBalanceLow: seven.toBytes(),
+        pendingBalanceCreditCounter: 1n,
+      };
+      const replayedZero = {
+        ...real,
+        availableBalance: zero.toBytes(),
+        decryptableAvailableBalance: zeroAe.toBytes(),
+      };
+      for (const state of [forgedPending, replayedZero]) {
+        applySession(f.config, f.apply, { state, keys: f.keys });
+        assert.throws(
+          () =>
+            applySession(f.config, f.apply, {
+              state,
+              keys: f.keys,
+              history: replay.events(),
+            }),
+          { name: "ConfidentialError", code: "IncompleteHistory" },
+        );
+      }
+      applySession(f.config, f.apply, {
+        state: real,
+        keys: f.keys,
+        history: replay.events(),
+      });
+    } finally {
+      zero.free();
+      seven.free();
+      zeroAe.free();
+      pubkey.free();
+    }
+  } finally {
+    f.close();
+  }
+});

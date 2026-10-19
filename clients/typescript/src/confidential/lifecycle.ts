@@ -33,6 +33,7 @@ import { AMOUNT_LO_BITS, MAX_TRANSFER_AMOUNT } from "./constants";
 import {
   readAvailableBalance,
   readEscrowBalance,
+  recoverEscrowBalance,
   checkEscrowKeys,
   type BalanceEvent,
   type ConfidentialTransferAccount,
@@ -119,12 +120,11 @@ export function applySession(
   input: ApplySessionInput,
   source: TransferSource,
 ) {
-  const balance = readEscrowBalance(
-    source.state,
-    0n,
-    source.keys,
-    source.history,
-  );
+  // The program does not check the AE that Apply writes. When history is
+  // supplied, the snapshot must match it rather than only itself.
+  const balance = source.history?.length
+    ? recoverEscrowBalance(source.state, 0n, source.keys, source.history)
+    : readEscrowBalance(source.state, 0n, source.keys);
   const appliedBalance = balance.available + balance.pending;
   assertU64(appliedBalance);
   const ae = source.keys.ae.encrypt(appliedBalance);

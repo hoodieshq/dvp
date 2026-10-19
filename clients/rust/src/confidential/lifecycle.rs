@@ -60,7 +60,13 @@ pub fn apply_session(
     mut args: ApplyConfidentialDvpInstructionArgs,
     source: TransferSource<'_>,
 ) -> Result<TransactionSession, ConfidentialError> {
-    let balance = read_escrow_balance(source.state, 0, source.keys, source.history)?;
+    // The program does not check the AE that Apply writes. When history is
+    // supplied, the snapshot must match it rather than only itself.
+    let balance = if source.history.is_empty() {
+        read_escrow_balance(source.state, 0, source.keys, source.history)?
+    } else {
+        recover_escrow_balance(source.state, 0, source.keys, source.history)?
+    };
     let amount = balance
         .available
         .checked_add(balance.pending)

@@ -132,6 +132,9 @@ for (const plan of [...session.preparation, session.finalTransaction]) {
 Refresh snapshots and rebuild after conflicting available-balance changes.
 Apply's expected counter does not prevent a concurrent credit from making its
 supplied AE value stale; check the resulting balance and repair if needed.
+With non-empty `history`, `applySession` rebuilds the balance from it and
+requires the snapshot to match, because the program does not check the AE that
+Apply writes. Without history it trusts the snapshot's own consistency.
 
 `RefundAmount` is `{ kind: "partial", amount }`, `{ kind: "full" }` or
 `{ kind: "none" }`. Partial must be nonzero; Full transfers all available funds,
