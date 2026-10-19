@@ -94,6 +94,7 @@ fn client_hooked_settle_resolves_hidden_amount_and_emits_memos() {
 
     // Execute Settle and check both memo and hook CPIs.
     let source = f.source(&context);
+    let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
     let recipient = context.get_account(&f.recipient).unwrap();
     let refund = context.get_account(&f.refund).unwrap();
     let swap = f.swap(&context);
@@ -109,7 +110,8 @@ fn client_hooked_settle_resolves_hidden_amount_and_emits_memos() {
         surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
         expected_recipient: None,
         expected_surplus_recipient: None,
-        auditor: None,
+        mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+        expected_auditor: None,
     };
     let session = settle_session(&f.config, f.settle_accounts(), request, &[], &extras).unwrap();
     let history = execute(&mut context, &f.config, session, &[&f.dvp.authority]);
@@ -242,6 +244,7 @@ fn client_hooked_funding_and_refund_in_both_formats() {
         // The fixture expires after 3600 seconds; move one second beyond expiry.
         context.advance_clock(3601);
         let source = f.source(&context);
+        let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
         let recipient = context.get_account(&f.refund).unwrap();
         let session = refund_session(
             &f.config,
@@ -255,7 +258,8 @@ fn client_hooked_funding_and_refund_in_both_formats() {
                 recipient: crate::utils::recipient_account(f.refund, &recipient),
                 expected_recipient: None,
                 amount: RefundAmount::Full,
-                auditor: None,
+                mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                expected_auditor: None,
             }),
             &[],
             &extras,
@@ -340,6 +344,7 @@ fn hooked_settle_rejects_v0() {
     let mut context = TestContext::new();
     let mut f = ClientFixture::with_hook(&mut context, TransactionFormat::V1, 0, true);
     let source = f.source(&context);
+    let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
     let recipient = context.get_account(&f.recipient).unwrap();
     let refund = context.get_account(&f.refund).unwrap();
     let swap = f.swap(&context);
@@ -368,7 +373,8 @@ fn hooked_settle_rejects_v0() {
                     surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
                     expected_recipient: None,
                     expected_surplus_recipient: None,
-                    auditor: None,
+                    mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                    expected_auditor: None,
                 },
                 leg_a,
                 leg_b,
@@ -560,6 +566,7 @@ fn settle_without_validation_list(prefund: bool) {
     let extras = resolved.unwrap();
     assert_eq!(extras, vec![AccountMeta::new_readonly(hook, false)]);
     let source = f.source(&context);
+    let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
     let recipient = context.get_account(&f.recipient).unwrap();
     let refund = context.get_account(&f.refund).unwrap();
     let swap = f.swap(&context);
@@ -578,7 +585,8 @@ fn settle_without_validation_list(prefund: bool) {
             surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
             expected_recipient: None,
             expected_surplus_recipient: None,
-            auditor: None,
+            mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+            expected_auditor: None,
         },
         &[],
         &extras,

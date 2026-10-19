@@ -5,7 +5,6 @@ import {
   type Rpc,
 } from "@solana/kit";
 import {
-  mintAuditor,
   settleSession,
   verifyConfidentialFunding,
   type EscrowKeys,
@@ -60,6 +59,8 @@ export async function prepareSettlement(
     // to stop trusting the RPC for the recipient keys.
     recipient,
     surplusRecipient: refund,
-    auditor: mintAuditor(mint),
+    // Pass expectedAuditor from application configuration (null for none) to
+    // stop trusting the RPC for the mint auditor.
+    mint,
   });
 }

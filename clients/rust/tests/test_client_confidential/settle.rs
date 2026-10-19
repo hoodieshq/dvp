@@ -130,6 +130,7 @@ fn settle_rejects_wrong_amount_or_keys() {
     let mut context = TestContext::new();
     let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B);
     let source = f.source(&context);
+    let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
     let swap = f.swap(&context);
     let recipient = context.get_account(&f.recipient).unwrap();
     let refund = context.get_account(&f.refund).unwrap();
@@ -149,7 +150,8 @@ fn settle_rejects_wrong_amount_or_keys() {
                 surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
                 expected_recipient: None,
                 expected_surplus_recipient: None,
-                auditor: None,
+                mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                expected_auditor: None,
             },
             &[],
             &[],
@@ -172,6 +174,7 @@ fn settle_binds_recipient_snapshots_and_expected_keys() {
     let mut context = TestContext::new();
     let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B + 7);
     let source = f.source(&context);
+    let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
     let swap = f.swap(&context);
     let recipient = context.get_account(&f.recipient).unwrap();
     let refund = context.get_account(&f.refund).unwrap();
@@ -192,7 +195,8 @@ fn settle_binds_recipient_snapshots_and_expected_keys() {
                 surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
                 expected_recipient,
                 expected_surplus_recipient,
-                auditor: None,
+                mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                expected_auditor: None,
             },
             &[],
             &[],
@@ -224,6 +228,72 @@ fn settle_binds_recipient_snapshots_and_expected_keys() {
             None
         ),
         Err(ConfidentialError::Account("recipient address or owner"))
+    ));
+}
+
+#[test]
+fn settle_binds_the_mint_and_expected_auditor() {
+    let mut context = TestContext::new();
+    let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B);
+    let source = f.source(&context);
+    let swap = f.swap(&context);
+    let recipient = context.get_account(&f.recipient).unwrap();
+    let refund = context.get_account(&f.refund).unwrap();
+    let (auditor, other) = (Keys::new(), Keys::new());
+    let build = |mint: MintAccount<'_>, expected_auditor| {
+        settle_session(
+            &f.config,
+            f.settle_accounts(),
+            SettleRequest {
+                source: TransferSource {
+                    state: &source,
+                    keys: &f.keys,
+                    history: &[],
+                },
+                swap: &swap,
+                expected_amount_b: AMOUNT_B,
+                recipient: crate::utils::recipient_account(f.recipient, &recipient),
+                surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
+                expected_recipient: None,
+                expected_surplus_recipient: None,
+                mint,
+                expected_auditor,
+            },
+            &[],
+            &[],
+        )
+    };
+    let without = context.get_account(&f.dvp.accounts.mint_b).unwrap();
+    set_mint_auditor(
+        &mut context,
+        &f.dvp.accounts.mint_b,
+        auditor.elgamal.pubkey(),
+    );
+    let with = context.get_account(&f.dvp.accounts.mint_b).unwrap();
+    let mint = |account| crate::utils::mint_account(f.dvp.accounts.mint_b, account);
+
+    assert!(build(mint(&without), Some(None)).is_ok());
+    assert!(build(mint(&with), None).is_ok());
+    assert!(build(mint(&with), Some(Some(auditor.elgamal.pubkey()))).is_ok());
+    // An RPC must neither add, remove nor substitute the configured auditor.
+    for (account, expected) in [
+        (&with, Some(None)),
+        (&without, Some(Some(auditor.elgamal.pubkey()))),
+        (&with, Some(Some(other.elgamal.pubkey()))),
+    ] {
+        assert!(matches!(
+            build(mint(account), expected),
+            Err(ConfidentialError::Account("mint auditor"))
+        ));
+    }
+    // A snapshot of another account than the swap's mint B.
+    let mint_a = context.get_account(&f.dvp.accounts.mint_a).unwrap();
+    assert!(matches!(
+        build(
+            crate::utils::mint_account(f.dvp.accounts.mint_a, &mint_a),
+            None
+        ),
+        Err(ConfidentialError::Account("mint address or owner"))
     ));
 }
 
@@ -261,6 +331,7 @@ fn combined_recipient_session(
     f: &ClientFixture,
 ) -> Result<TransactionSession, ConfidentialError> {
     let source = f.source(context);
+    let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
     let recipient = context.get_account(&f.refund).unwrap();
     let swap = f.swap(context);
     settle_session(
@@ -278,7 +349,8 @@ fn combined_recipient_session(
             surplus_recipient: crate::utils::recipient_account(f.refund, &recipient),
             expected_recipient: None,
             expected_surplus_recipient: None,
-            auditor: None,
+            mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+            expected_auditor: None,
         },
         &[],
         &[],

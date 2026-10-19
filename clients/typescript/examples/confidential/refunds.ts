@@ -5,7 +5,6 @@ import {
   type Rpc,
 } from "@solana/kit";
 import {
-  mintAuditor,
   readEscrowAccount,
   refundSession,
   type BalanceEvent,
@@ -56,7 +55,8 @@ export async function prepareRefund(
       // stop trusting the RPC for the destination key.
       recipient,
       amount,
-      auditor: mintAuditor(mintAccount),
+      // Pass expectedAuditor (null for none) to stop trusting the RPC for it.
+      mint: mintAccount,
     },
     extras,
   );

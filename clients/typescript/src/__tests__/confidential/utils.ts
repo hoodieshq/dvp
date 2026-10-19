@@ -298,7 +298,7 @@ export async function fixture(
     source,
     swap,
     amount: options.amountB ?? AMOUNT_B,
-    auditor: mintAuditor(context.account(mintB.address)!),
+    auditor: mintAuditor(context.account(mintB.address)!, mintB.address),
     recover: {
       ...seedTerms,
       ...reclaim,

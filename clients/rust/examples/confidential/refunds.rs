@@ -1,5 +1,5 @@
 use dvp_swap_program_client::confidential::{
-    mint_auditor, read_escrow_account, refund_session, BalanceEvent, ConfidentialError, EscrowKeys,
+    read_escrow_account, refund_session, BalanceEvent, ConfidentialError, EscrowKeys, MintAccount,
     RecipientAccount, RefundAmount, RefundInstruction, RefundRequest, SessionConfig,
     TransactionSession, TransferSource,
 };
@@ -33,7 +33,6 @@ pub fn refund(
         }
     };
     let (state, _) = read_escrow_account(&source, &escrow.owner, &escrow.data, &swap, &mint)?;
-    let auditor = mint_auditor(&mint_account.owner, &mint_account.data)?;
     refund_session(
         config,
         instruction,
@@ -52,7 +51,14 @@ pub fn refund(
             // stop trusting the RPC for it.
             expected_recipient: None,
             amount,
-            auditor: auditor.as_ref(),
+            mint: MintAccount {
+                address: mint,
+                owner: mint_account.owner,
+                data: &mint_account.data,
+            },
+            // Pin the auditor from application configuration (`Some(None)`
+            // for none) to stop trusting the RPC for it.
+            expected_auditor: None,
         }),
         leg_a_extras,
         leg_b_extras,

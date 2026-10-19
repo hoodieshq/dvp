@@ -138,6 +138,7 @@ test("Settle binds the recipient snapshot and expected key", async () => {
         swap: f.swap(),
         expectedAmountB: f.amount,
         recipient: context.account(address(f.recipient))!,
+        mint: context.account(f.common.mintB)!,
         surplusRecipient: context.account(f.common.userBAtaB)!,
       };
       await settleSession(f.config, f.settle, {
@@ -156,6 +157,46 @@ test("Settle binds the recipient snapshot and expected key", async () => {
         );
     } finally {
       pubkey.free();
+      otherPubkey.free();
+      other.free();
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test("Settle binds the mint snapshot and expected auditor", async () => {
+  const context = new TestContext(),
+    f = await fixture(context, 1, { auditor: true });
+  try {
+    await createAndFund(context, f);
+    const other = new ElGamalKeypair(),
+      otherPubkey = other.pubkey();
+    try {
+      const request = {
+        source: f.source(),
+        swap: f.swap(),
+        expectedAmountB: f.amount,
+        recipient: context.account(address(f.recipient))!,
+        surplusRecipient: context.account(f.common.userBAtaB)!,
+        mint: context.account(f.common.mintB)!,
+      };
+      await settleSession(f.config, f.settle, {
+        ...request,
+        expectedAuditor: f.auditor,
+      });
+      for (const [override, message] of [
+        // An RPC must neither remove nor substitute the configured auditor.
+        [{ expectedAuditor: null }, /Mint auditor mismatch/],
+        [{ expectedAuditor: otherPubkey.toBytes() }, /Mint auditor mismatch/],
+        // A snapshot of another account than the swap's mint B.
+        [{ mint: context.account(f.common.mintA)! }, /address or owner/],
+      ] as const)
+        await assert.rejects(
+          settleSession(f.config, f.settle, { ...request, ...override }),
+          { name: "ConfidentialError", code: "Account", message },
+        );
+    } finally {
       otherPubkey.free();
       other.free();
     }

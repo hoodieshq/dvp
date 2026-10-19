@@ -38,6 +38,15 @@ pub struct RecipientAccount<'a> {
     pub data: &'a [u8],
 }
 
+/// A mint account as fetched. Sessions bind it to the leg B mint before
+/// reading its optional auditor key.
+#[derive(Clone, Copy)]
+pub struct MintAccount<'a> {
+    pub address: Pubkey,
+    pub owner: Pubkey,
+    pub data: &'a [u8],
+}
+
 pub struct TransferSource<'a> {
     pub state: &'a ConfidentialTransferAccount,
     pub keys: &'a EscrowKeys,
@@ -95,7 +104,11 @@ pub struct SettleRequest<'a> {
     /// the recipient snapshot is trusted.
     pub expected_recipient: Option<&'a ElGamalPubkey>,
     pub expected_surplus_recipient: Option<&'a ElGamalPubkey>,
-    pub auditor: Option<&'a ElGamalPubkey>,
+    /// Fetched leg B mint, the source of the optional auditor key.
+    pub mint: MintAccount<'a>,
+    /// Auditor from application configuration: `Some(None)` requires a mint
+    /// without auditor. When `None`, the mint snapshot is trusted.
+    pub expected_auditor: Option<Option<&'a ElGamalPubkey>>,
 }
 
 pub fn settle_session(
@@ -151,6 +164,7 @@ pub fn settle_session(
     } else {
         None
     };
+    let auditor = read_auditor(&request.mint, mint, request.expected_auditor)?;
     let mut session = SessionBuilder::new(config, accounts.settlement_authority);
     let available = source
         .state
@@ -164,7 +178,7 @@ pub fn settle_session(
         balance,
         request.expected_amount_b,
         &recipient,
-        request.auditor,
+        auditor.as_ref(),
     )?;
     [
         accounts.payment_equality_context,
@@ -212,7 +226,7 @@ pub fn settle_session(
             surplus,
             surplus,
             surplus_recipient,
-            request.auditor,
+            auditor.as_ref(),
         )?;
         [
             accounts.surplus_equality_context,
@@ -251,7 +265,11 @@ pub struct RefundRequest<'a> {
     /// When `None`, the key read from the recipient snapshot is trusted.
     pub expected_recipient: Option<&'a ElGamalPubkey>,
     pub amount: RefundAmount,
-    pub auditor: Option<&'a ElGamalPubkey>,
+    /// Fetched leg B mint, the source of the optional auditor key.
+    pub mint: MintAccount<'a>,
+    /// `Some(None)` requires a mint without auditor. When `None`, the mint
+    /// snapshot is trusted.
+    pub expected_auditor: Option<Option<&'a ElGamalPubkey>>,
 }
 
 // Keep generated account sets directly usable without requiring callers to box them.
@@ -290,6 +308,8 @@ pub fn refund_session(
             request.expected_recipient,
         )
     };
+    let auditor =
+        |request: &RefundRequest<'_>| read_auditor(&request.mint, &mint, request.expected_auditor);
     let mut session = SessionBuilder::new(config, authority);
     let mut contexts = [None; 4];
     let refund = if let Some(request) = request {
@@ -327,7 +347,7 @@ pub fn refund_session(
                     balance()?,
                     amount,
                     &recipient(&request)?,
-                    request.auditor,
+                    auditor(&request)?.as_ref(),
                 )?;
                 for (out, key) in contexts.iter_mut().zip(transfer.contexts) {
                     *out = Some(key);
@@ -349,7 +369,7 @@ pub fn refund_session(
                     balance,
                     balance,
                     &recipient(&request)?,
-                    request.auditor,
+                    auditor(&request)?.as_ref(),
                 )?;
                 for (out, key) in contexts.iter_mut().zip(transfer.contexts) {
                     *out = Some(key);
@@ -427,6 +447,19 @@ pub fn refund_session(
         }
     };
     session.finish(vec![ix])
+}
+
+fn read_auditor(
+    mint: &MintAccount<'_>,
+    expected_mint: &Pubkey,
+    expected: Option<Option<&ElGamalPubkey>>,
+) -> Result<Option<ElGamalPubkey>, ConfidentialError> {
+    let auditor = mint_auditor(mint, expected_mint)?;
+    // An RPC must neither substitute nor add an auditor; refuse before any proof.
+    if expected.is_some_and(|expected| auditor.as_ref() != expected) {
+        return Err(ConfidentialError::Account("mint auditor"));
+    }
+    Ok(auditor)
 }
 
 fn read_recipient(
@@ -575,14 +608,16 @@ fn proof_error(error: impl std::fmt::Display) -> ConfidentialError {
     ConfidentialError::Proof(error.to_string())
 }
 
+/// Reads the optional auditor key of `mint`, which must be the account at
+/// `expected_mint` owned by Token-2022.
 pub fn mint_auditor(
-    owner: &Pubkey,
-    data: &[u8],
+    mint: &MintAccount<'_>,
+    expected_mint: &Pubkey,
 ) -> Result<Option<ElGamalPubkey>, ConfidentialError> {
-    if *owner != spl_token_2022_interface::ID {
-        return Err(ConfidentialError::Account("mint token program"));
+    if mint.address != *expected_mint || mint.owner != spl_token_2022_interface::ID {
+        return Err(ConfidentialError::Account("mint address or owner"));
     }
-    let mint = StateWithExtensions::<spl_token_2022_interface::state::Mint>::unpack(data)
+    let mint = StateWithExtensions::<spl_token_2022_interface::state::Mint>::unpack(mint.data)
         .map_err(|_| ConfidentialError::Account("mint layout"))?;
     let ct = mint.get_extension::<spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferMint>().map_err(|_| ConfidentialError::Account("mint CT extension"))?;
     Option::from(ct.auditor_elgamal_pubkey)

@@ -112,8 +112,12 @@ Record staging with size-checked writes.
 
 Input types omit fields the helper computes, retaining the generated instruction
 account names. `TransferSource` contains `{ state, keys, history? }`. Decode a
-token account's extension with `confidentialState`; read its mint's optional
-auditor with `mintAuditor` and pass it to settle and refund requests. For ordinary
+token account's extension with `confidentialState`. Settle and refund requests
+take the fetched mint B account as `mint`; the session checks its address and
+Token-2022 owner and reads the optional auditor key from it. `expectedAuditor`
+pins the auditor from application configuration (`null` for none) and fails
+before any proof if the snapshot differs. `mintAuditor(account, expectedMint)`
+exposes the same read. For ordinary
 wallet-to-escrow funding, use Token-2022's confidential transfer helpers from
 `@solana-program/token-2022/confidential`; the DvP API covers escrow operations.
 The test suite's funding wrapper is private to `__tests__/confidential/utils.ts`.
@@ -243,8 +247,8 @@ and frees the keys. Tests execute this complete example in both v0 and v1;
 wallet setup and LiteSVM stay in test helpers.
 
 `clients/typescript/examples/confidential/settle.ts` shows preparing a settlement
-from one RPC snapshot: verify the escrow and amount, decode recipient balances,
-read the auditor and build the proof session. It assumes both legs are funded,
+from one RPC snapshot: verify the escrow and amount, then pass the recipient and
+mint snapshots to build the proof session. It assumes both legs are funded,
 pending credits are applied and there are no transfer hooks. The v0/v1 settlement
 tests execute this example against LiteSVM. `send-session.ts` shows signing and
 sending preparations in order through the integrator's send-and-confirm callback.

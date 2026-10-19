@@ -87,6 +87,7 @@ fn client_partial_reclaim_then_full_in_both_formats() {
         let partial = MAX_TRANSFER_AMOUNT;
         for amount in [RefundAmount::Partial(partial), RefundAmount::Full] {
             let source = f.source(&context);
+            let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
             let recipient = context.get_account(&f.refund).unwrap();
             let session = refund_session(
                 &f.config,
@@ -100,7 +101,8 @@ fn client_partial_reclaim_then_full_in_both_formats() {
                     recipient: crate::utils::recipient_account(f.refund, &recipient),
                     expected_recipient: None,
                     amount,
-                    auditor: None,
+                    mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                    expected_auditor: None,
                 }),
                 &[],
                 &[],
@@ -205,6 +207,7 @@ fn client_cancel_reject_and_recover_in_both_formats() {
 
             // Send all proof preparations before the late credit arrives.
             let source = f.source(&context);
+            let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
             let recipient = context.get_account(&f.refund).unwrap();
             let session = refund_session(
                 &f.config,
@@ -218,7 +221,8 @@ fn client_cancel_reject_and_recover_in_both_formats() {
                     recipient: crate::utils::recipient_account(f.refund, &recipient),
                     expected_recipient: None,
                     amount,
-                    auditor: None,
+                    mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                    expected_auditor: None,
                 }),
                 &[],
                 &[],
@@ -271,6 +275,7 @@ fn client_cancel_reject_and_recover_in_both_formats() {
             // Recover Full returns the late credit plus any remainder from Partial Cancel.
             // The tombstone and original terms identify the already closed swap.
             let source = f.source(&context);
+            let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
             let recipient = context.get_account(&f.refund).unwrap();
             let accounts = RecoverConfidentialDvp {
                 signer: f.dvp.user_b.pubkey(),
@@ -309,7 +314,8 @@ fn client_cancel_reject_and_recover_in_both_formats() {
                     recipient: crate::utils::recipient_account(f.refund, &recipient),
                     expected_recipient: None,
                     amount: RefundAmount::Full,
-                    auditor: None,
+                    mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                    expected_auditor: None,
                 }),
                 &[],
                 &[],
@@ -319,6 +325,7 @@ fn client_cancel_reject_and_recover_in_both_formats() {
 
             // Full drained the confidential funds; None withdraws public tokens and closes escrow.
             let source = f.source(&context);
+            let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
             let recipient = context.get_account(&f.refund).unwrap();
             let accounts = RecoverConfidentialDvp {
                 signer: f.dvp.user_b.pubkey(),
@@ -356,7 +363,8 @@ fn client_cancel_reject_and_recover_in_both_formats() {
                     recipient: crate::utils::recipient_account(f.refund, &recipient),
                     expected_recipient: None,
                     amount: RefundAmount::None,
-                    auditor: None,
+                    mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                    expected_auditor: None,
                 }),
                 &[],
                 &[],
@@ -438,6 +446,7 @@ fn refund_binds_the_recipient_snapshot() {
         ..Default::default()
     };
     let account = crate::utils::ct_token_account(mint, ct);
+    let mint_account = crate::utils::ct_mint_account();
     let mut system_owned = account.clone();
     system_owned.owner = Pubkey::default();
     let other_mint = crate::utils::ct_token_account(Pubkey::new_unique(), ct);
@@ -472,7 +481,8 @@ fn refund_binds_the_recipient_snapshot() {
                 recipient,
                 expected_recipient,
                 amount: RefundAmount::Partial(1),
-                auditor: None,
+                mint: crate::utils::mint_account(mint, &mint_account),
+                expected_auditor: None,
             }),
             &[],
             &[],
@@ -571,6 +581,7 @@ fn refund_from_state(
     };
     let (mint, destination) = (Pubkey::new_unique(), Pubkey::new_unique());
     let recipient = crate::utils::ct_token_account(mint, recipient);
+    let mint_account = crate::utils::ct_mint_account();
     let accounts = ReclaimConfidentialDvp {
         signer: config.payer,
         swap_dvp: Pubkey::new_unique(),
@@ -597,7 +608,8 @@ fn refund_from_state(
             recipient: crate::utils::recipient_account(destination, &recipient),
             expected_recipient: None,
             amount,
-            auditor: None,
+            mint: crate::utils::mint_account(mint, &mint_account),
+            expected_auditor: None,
         }),
         &[],
         &[],

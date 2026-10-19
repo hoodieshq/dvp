@@ -42,6 +42,7 @@ import {
   recoverEscrowBalance,
   checkEscrowKeys,
   confidentialState,
+  mintAuditor,
   type BalanceEvent,
   type ConfidentialTransferAccount,
 } from "./balance";
@@ -181,7 +182,13 @@ export type SettleRequest = Readonly<{
    */
   expectedRecipient?: Uint8Array;
   expectedSurplusRecipient?: Uint8Array;
-  auditor?: Uint8Array;
+  /** Fetched mint B account, the source of the optional auditor key. */
+  mint: EncodedAccount;
+  /**
+   * Auditor from application configuration; `null` requires a mint without
+   * auditor. When omitted, the mint snapshot is trusted.
+   */
+  expectedAuditor?: Uint8Array | null;
 }>;
 
 export async function settleSession(
@@ -247,6 +254,7 @@ export async function settleSession(
         )
       : undefined;
   if (surplusRecipient) checkRecipient(surplusRecipient, paymentCredits);
+  const auditor = readAuditor(request.mint, mint, request.expectedAuditor);
   const session = new SessionBuilder(config, input.settlementAuthority);
   const payment = await prepareTransfer(
     session,
@@ -255,7 +263,7 @@ export async function settleSession(
     balance,
     request.expectedAmountB,
     recipient,
-    request.auditor,
+    auditor,
   );
   const [paymentEqualityContext, paymentValidityContext, paymentRangeContext] =
     payment.contexts;
@@ -297,7 +305,7 @@ export async function settleSession(
         surplus,
         surplus,
         surplusRecipient,
-        request.auditor,
+        auditor,
       )
     : undefined;
   const remaining = parseCiphertext(refund?.remaining ?? payment.remaining);
@@ -369,7 +377,10 @@ export type RefundRequest = Readonly<{
   /** When omitted, the key read from the recipient snapshot is trusted. */
   expectedRecipient?: Uint8Array;
   amount: RefundAmount;
-  auditor?: Uint8Array;
+  /** Fetched mint B account, the source of the optional auditor key. */
+  mint: EncodedAccount;
+  /** `null` requires a mint without auditor; when omitted, the snapshot is trusted. */
+  expectedAuditor?: Uint8Array | null;
 }>;
 
 export async function refundSession(
@@ -431,7 +442,7 @@ export async function refundSession(
           mint,
           request.expectedRecipient,
         ),
-        request.auditor,
+        readAuditor(request.mint, mint, request.expectedAuditor),
       );
       [equalityContext, validityContext, rangeContext] = transfer.contexts;
       legBRefund = {
@@ -525,4 +536,21 @@ function readRecipient(
   )
     throw new ConfidentialError("Account", "Recipient ElGamal key mismatch");
   return state;
+}
+
+function readAuditor(
+  account: EncodedAccount,
+  mint: Address,
+  expected?: Uint8Array | null,
+): Uint8Array | undefined {
+  const auditor = mintAuditor(account, mint);
+  // An RPC must neither substitute nor add an auditor; refuse before any proof.
+  if (
+    expected !== undefined &&
+    (expected === null
+      ? auditor !== undefined
+      : auditor === undefined || !bytesEqual(auditor, expected))
+  )
+    throw new ConfidentialError("Account", "Mint auditor mismatch");
+  return auditor;
 }

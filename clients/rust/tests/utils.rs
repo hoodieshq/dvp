@@ -549,3 +549,47 @@ pub fn ct_token_account(mint: Pubkey, ct: ConfidentialTransferAccount) -> Accoun
         rent_epoch: 0,
     }
 }
+
+/// A fetched mint account as a session mint snapshot bound to `address`.
+pub fn mint_account(address: Pubkey, account: &Account) -> MintAccount<'_> {
+    MintAccount {
+        address,
+        owner: account.owner,
+        data: &account.data,
+    }
+}
+
+/// A Token-2022 mint with a confidential transfer extension and no auditor,
+/// for session tests without ledger setup.
+pub fn ct_mint_account() -> Account {
+    use spl_token_2022_interface::{
+        extension::{
+            confidential_transfer::ConfidentialTransferMint, BaseStateWithExtensionsMut,
+            ExtensionType, StateWithExtensionsMut,
+        },
+        state::Mint,
+    };
+    let len = ExtensionType::try_calculate_account_len::<Mint>(&[
+        ExtensionType::ConfidentialTransferMint,
+    ])
+    .unwrap();
+    let mut data = vec![0; len];
+    let mut state = StateWithExtensionsMut::<Mint>::unpack_uninitialized(&mut data).unwrap();
+    state.base = Mint {
+        decimals: 6,
+        is_initialized: true,
+        ..Default::default()
+    };
+    state.pack_base();
+    state.init_account_type().unwrap();
+    *state
+        .init_extension::<ConfidentialTransferMint>(true)
+        .unwrap() = ConfidentialTransferMint::default();
+    Account {
+        lamports: 1,
+        data,
+        owner: TOKEN,
+        executable: false,
+        rent_epoch: 0,
+    }
+}

@@ -1,7 +1,7 @@
 use dvp_swap_program_client::{
     confidential::{
-        mint_auditor, settle_session, BalanceEvent, ConfidentialError, EscrowKeys,
-        RecipientAccount, SessionConfig, SettleRequest, TransactionSession, TransferSource,
+        settle_session, BalanceEvent, ConfidentialError, EscrowKeys, MintAccount, RecipientAccount,
+        SessionConfig, SettleRequest, TransactionSession, TransferSource,
     },
     instructions::SettleConfidentialDvp,
     verify::verify_confidential_funding,
@@ -51,7 +51,6 @@ pub fn settle(
         owner: snapshot.surplus_recipient.owner,
         data: &snapshot.surplus_recipient.data,
     };
-    let auditor = mint_auditor(&snapshot.mint.owner, &snapshot.mint.data)?;
     settle_session(
         config,
         accounts,
@@ -69,7 +68,14 @@ pub fn settle(
             // the RPC for them.
             expected_recipient: None,
             expected_surplus_recipient: None,
-            auditor: auditor.as_ref(),
+            mint: MintAccount {
+                address: swap.base.mint_b,
+                owner: snapshot.mint.owner,
+                data: &snapshot.mint.data,
+            },
+            // Pin the auditor from application configuration (`Some(None)`
+            // for none) to stop trusting the RPC for it.
+            expected_auditor: None,
         },
         leg_a_extras,
         leg_b_extras,

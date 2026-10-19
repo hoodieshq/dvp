@@ -91,7 +91,11 @@ ElGamal key. `expected_recipient` (and `expected_surplus_recipient` for Settle)
 optionally pin the keys from the trade agreement; on a mismatch the session
 fails before building any proof. Without them the RPC is trusted for recipient
 keys, as in any Token-2022 wallet (spec section 10).
-Read the mint's optional auditor with `mint_auditor`. For confidential transfers,
+The requests also take the leg B mint as a `MintAccount`; the session checks its
+address and Token-2022 owner and reads the optional auditor key from it.
+`expected_auditor` pins the auditor from application configuration
+(`Some(None)` for none) and fails before any proof if the snapshot differs.
+`mint_auditor(mint, expected_mint)` exposes the same read. For confidential transfers,
 resolve leg B hook extras with `resolve_confidential_hook_accounts`, which uses
 `u64::MAX` and strips signer flags. The validation account is optional: when
 absent, the resolver returns just the readonly, non-signer hook program account.
@@ -219,8 +223,8 @@ construction, so these checks do not replace final on-chain validation.
 
 - `create_apply.rs`: derive the shared seed through a KMS callback, Create, verify
   fetched accounts before SPL wallet funding, then Apply from a fresh snapshot.
-- `settle.rs`: verify fetched swap/escrow/recipient snapshots, read the mint auditor,
-  and build an exact or surplus Settle. Integration tests execute this recipe in
+- `settle.rs`: verify fetched swap/escrow snapshots, pass the recipient and mint
+  snapshots, and build an exact or surplus Settle. Integration tests execute this recipe in
   both formats, including a mint auditor and nonzero high limbs.
 - `refunds.rs`: prepare Reclaim, Cancel, Reject or Recover from current snapshots.
 - `send.rs`: sign with a fresh blockhash, confirm preparations in order, send the

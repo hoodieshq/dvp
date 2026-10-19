@@ -42,6 +42,7 @@ fn client_cleans_up_interrupted_preparations_in_both_formats() {
         };
         for stage in stages {
             let source = f.source(&context);
+            let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
             let recipient = context.get_account(&f.recipient).unwrap();
             let refund = context.get_account(&f.refund).unwrap();
             let swap = f.swap(&context);
@@ -60,7 +61,8 @@ fn client_cleans_up_interrupted_preparations_in_both_formats() {
                     surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
                     expected_recipient: None,
                     expected_surplus_recipient: None,
-                    auditor: None,
+                    mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                    expected_auditor: None,
                 },
                 &[],
                 &[],
@@ -192,6 +194,7 @@ fn client_rejects_wrong_high_limb_atomically_and_cleans_up_in_both_formats() {
         let mut context = TestContext::new();
         let f = funded_fixture(&mut context, format);
         let source = f.source(&context);
+        let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
         let available = checked_available_balance(&source, &f.keys).unwrap();
         let recipient = context.get_account(&f.recipient).unwrap();
         let refund = context.get_account(&f.refund).unwrap();
@@ -215,7 +218,8 @@ fn client_rejects_wrong_high_limb_atomically_and_cleans_up_in_both_formats() {
                 surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
                 expected_recipient: None,
                 expected_surplus_recipient: None,
-                auditor: None,
+                mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                expected_auditor: None,
             },
             &[],
             &[],

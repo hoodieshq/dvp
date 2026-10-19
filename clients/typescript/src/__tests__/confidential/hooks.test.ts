@@ -119,6 +119,7 @@ for (const validationState of ["present", "absent", "prefunded"] as const) {
         swap: f.swap(),
         expectedAmountB: f.amount,
         recipient: context.account(address(f.recipient))!,
+        mint: context.account(f.common.mintB)!,
         surplusRecipient: context.account(f.common.userBAtaB)!,
       };
       await assert.rejects(
