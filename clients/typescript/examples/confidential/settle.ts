@@ -6,15 +6,17 @@ import {
 } from "@solana/kit";
 import {
   settleSession,
-  verifyConfidentialFunding,
+  verifyConfidentialTerms,
   type EscrowKeys,
+  type ExpectedConfidentialTerms,
   type SessionConfig,
   type SettleSessionInput,
 } from "../../src/confidential";
 
 /**
  * Happy path after funding both legs and applying leg B's pending credits.
- * Supply accounts derived from agreed public terms, and the agreed private amount.
+ * Supply accounts derived from the agreed terms, and those terms; the settlement
+ * authority re-validates every term before Settle.
  * This example assumes no transfer hooks and a current, consistent AE balance.
  */
 export async function prepareSettlement(
@@ -22,7 +24,7 @@ export async function prepareSettlement(
   config: SessionConfig,
   accounts: SettleSessionInput,
   keys: EscrowKeys,
-  expectedAmount: bigint,
+  terms: ExpectedConfidentialTerms,
 ) {
   // Read the swap, escrow, receiving accounts and auditor from one RPC snapshot.
   const snapshots = await fetchEncodedAccounts(
@@ -40,11 +42,11 @@ export async function prepareSettlement(
   const [swap, escrow, recipient, refund, mint] = snapshots;
   if (!swap || !escrow || !recipient || !refund || !mint)
     throw new Error("RPC returned an incomplete settlement snapshot");
-  const checked = await verifyConfidentialFunding(
+  const checked = await verifyConfidentialTerms(
     swap,
     escrow,
     keys,
-    expectedAmount,
+    terms,
     config.programAddress,
   );
 
@@ -53,7 +55,7 @@ export async function prepareSettlement(
   return settleSession(config, accounts, {
     source: { state: checked.state, keys },
     swap: checked.swap,
-    expectedAmountB: expectedAmount,
+    expectedAmountB: terms.amountB,
     // The session binds both snapshots to the Settle destinations and mint B.
     // Pass expectedRecipient/expectedSurplusRecipient from the trade agreement
     // to stop trusting the RPC for the recipient keys.

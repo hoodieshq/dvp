@@ -60,6 +60,7 @@ import {
   type ConfidentialTransferAccount,
   type ConfidentialAccountKeys,
   type SessionConfig,
+  type ExpectedConfidentialTerms,
 } from "../../confidential";
 import { HOOK_PROGRAM, TestContext, execute, send } from "./context";
 
@@ -298,6 +299,17 @@ export async function fixture(
     source,
     swap,
     amount: options.amountB ?? AMOUNT_B,
+    // The agreed public terms, taken from the Create input.
+    terms: {
+      ...seedTerms,
+      tokenProgramA: create.tokenProgramA,
+      amountA: create.amountA,
+      amountB: options.amountB ?? AMOUNT_B,
+      expiryTimestamp: create.expiryTimestamp,
+      earliestSettlementTimestamp: null,
+      userASettlementDestination: seedTerms.userA,
+      userBSettlementDestination: seedTerms.userB,
+    } satisfies ExpectedConfidentialTerms,
     auditor: mintAuditor(context.account(mintB.address)!, mintB.address),
     recover: {
       ...seedTerms,

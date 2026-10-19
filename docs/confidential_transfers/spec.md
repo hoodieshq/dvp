@@ -151,9 +151,13 @@ Check 4 is the only lower bound on amount B: confidential Create cannot reject
 a zero amount (7.3), so a funder who skips it can fund leg A for no payment.
 
 These checks do not compare the public terms with the agreed trade. Callers
-must separately compare parties, mints, settlement authority, amount A,
+must also compare parties, mints, settlement authority, amount A,
 destinations, nonce, expiry and earliest settlement time before funding or
 settlement. A valid PDA and amount B do not prove agreement on those terms.
+Rust `verify::verify_confidential_terms` and TypeScript
+`verifyConfidentialTerms` do both: they take the agreed terms, require the swap
+at their PDA (covering parties, mints, settlement authority and nonce), run
+these checks and compare the remaining public terms.
 
 ### 4.5 Test vectors
 

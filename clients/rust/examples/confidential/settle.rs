@@ -4,7 +4,7 @@ use dvp_swap_program_client::{
         SessionConfig, SettleRequest, TransactionSession, TransferSource,
     },
     instructions::SettleConfidentialDvp,
-    verify::verify_confidential_funding,
+    verify::{verify_confidential_terms, ExpectedConfidentialTerms},
 };
 use solana_account::Account;
 use solana_instruction::AccountMeta;
@@ -28,19 +28,14 @@ pub fn settle(
     accounts: SettleConfidentialDvp,
     snapshot: Snapshot<'_>,
     keys: &EscrowKeys,
-    expected_amount_b: u64,
+    terms: &ExpectedConfidentialTerms,
     history: &[BalanceEvent],
     leg_a_extras: &[AccountMeta],
     leg_b_extras: &[AccountMeta],
 ) -> Result<TransactionSession, ConfidentialError> {
-    let (swap, escrow) = verify_confidential_funding(
-        &accounts.swap_dvp,
-        snapshot.swap,
-        &accounts.dvp_ata_b,
-        snapshot.escrow,
-        keys,
-        expected_amount_b,
-    )?;
+    // The settlement authority re-validates every agreed term before Settle.
+    let checked = verify_confidential_terms(snapshot.swap, snapshot.escrow, keys, terms)?;
+    let (swap, escrow) = (checked.swap, checked.state);
     let recipient = RecipientAccount {
         address: accounts.user_a_destination_ata_b,
         owner: snapshot.recipient.owner,
@@ -61,7 +56,7 @@ pub fn settle(
                 history,
             },
             swap: &swap,
-            expected_amount_b,
+            expected_amount_b: terms.amount_b,
             recipient,
             surplus_recipient,
             // Pass recipient keys from the trade agreement to stop trusting

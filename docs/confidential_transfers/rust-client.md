@@ -55,8 +55,11 @@ invalid accounts and still propagates RPC errors.
 With `fetch`, `verify::verify_confidential_funding` combines these checks over the
 two fetched accounts and returns the checked terms and CT state. It does not
 compare public terms with an off-chain agreement. Before funding or settling,
-compare parties, mints, settlement authority, amount A, destinations, nonce,
-expiry and earliest settlement time with the agreed trade.
+use `verify::verify_confidential_terms` with `ExpectedConfidentialTerms` for the
+agreed trade instead: it runs the same checks at the swap PDA and escrow B
+derived from those terms, then compares token program A, amount A, expiry,
+earliest settlement time and both resolved destinations. The funding and settle
+examples use it.
 
 ## Transaction sessions
 

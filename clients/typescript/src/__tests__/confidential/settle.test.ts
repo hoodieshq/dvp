@@ -5,7 +5,11 @@ import { address } from "@solana/kit";
 import { ElGamalKeypair } from "@solana/zk-sdk";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readEscrowBalance, settleSession } from "../../confidential";
+import {
+  readEscrowBalance,
+  settleSession,
+  verifyConfidentialTerms,
+} from "../../confidential";
 import { AMOUNT_LO_BITS } from "../../confidential/constants";
 import { TestContext, execute } from "./context";
 import { createAndFund, fixture, fundAsset, fundEscrow } from "./utils";
@@ -24,7 +28,7 @@ for (const format of [1, 0] as const) {
         f.config,
         { create: f.create, apply: f.apply, settle: f.settle },
         f.keys,
-        f.amount,
+        f.terms,
         {
           send: async (session) => {
             await execute(context, f.config, session);
@@ -97,7 +101,7 @@ for (const format of [1, 0] as const) {
           f.config,
           f.settle,
           f.keys,
-          f.amount,
+          f.terms,
         ),
       );
       assert(rentSizes.length > 0);
@@ -200,6 +204,61 @@ test("Settle binds the mint snapshot and expected auditor", async () => {
       otherPubkey.free();
       other.free();
     }
+  } finally {
+    f.close();
+  }
+});
+
+test("verifyConfidentialTerms compares every public term", async () => {
+  const context = new TestContext(),
+    f = await fixture(context, 1);
+  try {
+    await createAndFund(context, f);
+    const swap = context.account(f.common.swapDvp)!,
+      escrow = context.account(f.common.dvpAtaB)!;
+    const checked = await verifyConfidentialTerms(
+      swap,
+      escrow,
+      f.keys,
+      f.terms,
+    );
+    assert.equal(checked.swapAddress, f.common.swapDvp);
+    assert.equal(checked.escrowB, f.common.dvpAtaB);
+    const other = f.common.dvpAtaA;
+    for (const [change, field] of [
+      [{ tokenProgramA: other }, "token program A"],
+      [{ amountA: f.terms.amountA + 1n }, "amount A"],
+      [{ expiryTimestamp: f.terms.expiryTimestamp + 1n }, "expiry"],
+      [{ earliestSettlementTimestamp: 1n }, "earliest settlement"],
+      [{ userASettlementDestination: other }, "user A settlement destination"],
+      [{ userBSettlementDestination: other }, "user B settlement destination"],
+    ] as const)
+      await assert.rejects(
+        verifyConfidentialTerms(swap, escrow, f.keys, {
+          ...f.terms,
+          ...change,
+        }),
+        {
+          name: "ConfidentialError",
+          code: "Account",
+          message: `Wrong ${field}`,
+        },
+      );
+    // Seed terms derive another PDA; amount B is bound by the ciphertexts.
+    await assert.rejects(
+      verifyConfidentialTerms(swap, escrow, f.keys, {
+        ...f.terms,
+        nonce: f.terms.nonce + 1n,
+      }),
+      { name: "SwapDvpVerificationError" },
+    );
+    await assert.rejects(
+      verifyConfidentialTerms(swap, escrow, f.keys, {
+        ...f.terms,
+        amountB: f.terms.amountB + 1n,
+      }),
+      { name: "ConfidentialError", code: "AmountMismatch" },
+    );
   } finally {
     f.close();
   }

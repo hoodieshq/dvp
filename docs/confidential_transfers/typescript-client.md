@@ -63,8 +63,12 @@ Before funding, call `verifyConfidentialFunding(rawSwap, rawEscrow, keys,
 expectedAmount)`. It checks the canonical swap and Token-2022 escrow ATA, mint,
 authority, ElGamal key, approval, confidential credits, agreed amount ciphertexts
 and AE/ElGamal balance agreement. A foreign ElGamal key throws
-`ConfidentialError` with code `EscrowKeyMismatch` before the amount comparison. Compare the returned public terms with the
-agreed trade as well. `readEscrowAccount` and `verifyConfidentialSwap` expose
+`ConfidentialError` with code `EscrowKeyMismatch` before the amount comparison.
+Before funding or settling, prefer `verifyConfidentialTerms(rawSwap, rawEscrow,
+keys, terms)` with the agreed `ExpectedConfidentialTerms`: it also requires the
+swap at the PDA of those terms and compares token program A, amount A, expiry,
+earliest settlement time and both resolved destinations. The swap and settle
+examples use it. `readEscrowAccount` and `verifyConfidentialSwap` expose
 the individual checks when accounts have already been fetched and verified.
 
 ## Sessions

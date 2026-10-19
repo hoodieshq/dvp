@@ -10,7 +10,9 @@ use std::borrow::Cow;
 use dvp_swap_program_client::{
     confidential::*,
     instructions::*,
-    verify::{decode_swap_dvp_account, ConfidentialSwapDvp, SwapDvpAccount},
+    verify::{
+        decode_swap_dvp_account, ConfidentialSwapDvp, ExpectedConfidentialTerms, SwapDvpAccount,
+    },
 };
 use litesvm::types::TransactionMetadata;
 use solana_account::Account;
@@ -219,6 +221,30 @@ impl ClientFixture {
             new_decryptable_available_balance: [0; 36],
         }
     }
+    /// The agreed public terms, taken from the Create arguments.
+    pub fn expected_terms(&self, amount_b: u64) -> ExpectedConfidentialTerms {
+        let (accounts, args) = (&self.dvp.accounts, &self.dvp.args);
+        ExpectedConfidentialTerms {
+            settlement_authority: accounts.settlement_authority,
+            user_a: accounts.user_a,
+            user_b: accounts.user_b,
+            mint_a: accounts.mint_a,
+            mint_b: accounts.mint_b,
+            token_program_a: accounts.token_program_a,
+            amount_a: args.amount_a,
+            amount_b,
+            nonce: args.nonce,
+            expiry_timestamp: args.expiry_timestamp,
+            earliest_settlement_timestamp: args.earliest_settlement_timestamp,
+            user_a_settlement_destination: args
+                .user_a_settlement_destination
+                .unwrap_or(accounts.user_a),
+            user_b_settlement_destination: args
+                .user_b_settlement_destination
+                .unwrap_or(accounts.user_b),
+        }
+    }
+
     pub fn settle_accounts(&self) -> SettleConfidentialDvp {
         let placeholder = Pubkey::default();
         SettleConfidentialDvp {

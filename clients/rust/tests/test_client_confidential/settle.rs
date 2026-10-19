@@ -7,6 +7,7 @@ use crate::{
 };
 use dvp_swap_program_client::confidential::test_utils::{AMOUNT_LO_BITS, RECORD_PROGRAM_ID};
 use dvp_swap_program_client::confidential::*;
+use dvp_swap_program_client::verify::ExpectedConfidentialTerms;
 
 #[test]
 fn client_settle_exact_and_surplus_in_both_formats() {
@@ -57,7 +58,7 @@ fn client_settle_exact_and_surplus_in_both_formats() {
                     mint: &mint_account,
                 },
                 &f.keys,
-                amount_b,
+                &f.expected_terms(amount_b),
                 &[],
                 &[],
                 &[],
@@ -123,6 +124,60 @@ fn client_settle_credits_payment_and_surplus_to_the_same_recipient() {
         2
     );
     assert!(context.get_account(&f.dvp.accounts.swap_dvp).is_none());
+}
+
+#[test]
+fn verify_confidential_terms_compares_every_public_term() {
+    use dvp_swap_program_client::verify::verify_confidential_terms;
+    let mut context = TestContext::new();
+    let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B);
+    let swap = context.get_account(&f.dvp.accounts.swap_dvp).unwrap();
+    let escrow = context.get_account(&f.dvp.accounts.dvp_ata_b).unwrap();
+    let terms = f.expected_terms(AMOUNT_B);
+    let checked = verify_confidential_terms(&swap, &escrow, &f.keys, &terms).unwrap();
+    assert_eq!(checked.swap_address, f.dvp.accounts.swap_dvp);
+    assert_eq!(checked.escrow_b, f.dvp.accounts.dvp_ata_b);
+
+    let other = solana_pubkey::Pubkey::new_unique();
+    type Change = fn(&mut ExpectedConfidentialTerms, solana_pubkey::Pubkey);
+    let changed: [(Change, &str); 6] = [
+        (|t, k| t.token_program_a = k, "token program A"),
+        (|t, _| t.amount_a += 1, "amount A"),
+        (|t, _| t.expiry_timestamp += 1, "expiry"),
+        (
+            |t, _| t.earliest_settlement_timestamp = Some(1),
+            "earliest settlement",
+        ),
+        (
+            |t, k| t.user_a_settlement_destination = k,
+            "user A settlement destination",
+        ),
+        (
+            |t, k| t.user_b_settlement_destination = k,
+            "user B settlement destination",
+        ),
+    ];
+    for (change, field) in changed {
+        let mut wrong = terms.clone();
+        change(&mut wrong, other);
+        assert!(matches!(
+            verify_confidential_terms(&swap, &escrow, &f.keys, &wrong),
+            Err(ConfidentialError::Account(message)) if message == field
+        ));
+    }
+    // Seed terms derive another PDA; amount B is bound by the ciphertexts.
+    let mut wrong = terms.clone();
+    wrong.nonce += 1;
+    assert!(matches!(
+        verify_confidential_terms(&swap, &escrow, &f.keys, &wrong),
+        Err(ConfidentialError::Swap(_))
+    ));
+    let mut wrong = terms.clone();
+    wrong.amount_b += 1;
+    assert!(matches!(
+        verify_confidential_terms(&swap, &escrow, &f.keys, &wrong),
+        Err(ConfidentialError::AmountMismatch)
+    ));
 }
 
 #[test]

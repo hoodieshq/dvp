@@ -290,6 +290,98 @@ pub fn verify_confidential_funding(
     Ok((swap, escrow))
 }
 
+/// Public terms of an agreed confidential trade. Destinations are resolved:
+/// Create stores a user's own address when no destination is given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpectedConfidentialTerms {
+    pub settlement_authority: Pubkey,
+    pub user_a: Pubkey,
+    pub user_b: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub token_program_a: Pubkey,
+    pub amount_a: u64,
+    pub amount_b: u64,
+    pub nonce: u64,
+    pub expiry_timestamp: i64,
+    pub earliest_settlement_timestamp: Option<i64>,
+    pub user_a_settlement_destination: Pubkey,
+    pub user_b_settlement_destination: Pubkey,
+}
+
+/// Swap and escrow B checked against [`ExpectedConfidentialTerms`].
+#[cfg(all(feature = "fetch", feature = "confidential"))]
+#[derive(Clone, Debug)]
+pub struct VerifiedConfidentialTerms {
+    pub swap_address: Pubkey,
+    pub swap: ConfidentialSwapDvp,
+    pub escrow_b: Pubkey,
+    pub state:
+        spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferAccount,
+}
+
+/// Funding and settlement gate: [`verify_confidential_funding`] at the swap
+/// PDA and escrow B derived from `terms`, then every public term compared
+/// with the agreed trade. The PDA covers the parties, mints, settlement
+/// authority and nonce; the ciphertexts cover amount B.
+#[cfg(all(feature = "fetch", feature = "confidential"))]
+pub fn verify_confidential_terms(
+    swap_account: &solana_account::Account,
+    escrow_b_account: &solana_account::Account,
+    keys: &crate::confidential::EscrowKeys,
+    terms: &ExpectedConfidentialTerms,
+) -> Result<VerifiedConfidentialTerms, crate::confidential::ConfidentialError> {
+    use crate::confidential::ConfidentialError;
+    let (swap_address, _) = find_swap_dvp_address(
+        &terms.settlement_authority,
+        &terms.user_a,
+        &terms.user_b,
+        &terms.mint_a,
+        &terms.mint_b,
+        terms.nonce,
+    );
+    let escrow_b = find_swap_dvp_escrow_ata(&swap_address, &terms.mint_b, &TOKEN_2022_PROGRAM_ID);
+    let (swap, state) = verify_confidential_funding(
+        &swap_address,
+        swap_account,
+        &escrow_b,
+        escrow_b_account,
+        keys,
+        terms.amount_b,
+    )?;
+    let base = &swap.base;
+    for (field, matches) in [
+        (
+            "token program A",
+            base.token_program_a == terms.token_program_a,
+        ),
+        ("amount A", base.amount_a == terms.amount_a),
+        ("expiry", base.expiry_timestamp == terms.expiry_timestamp),
+        (
+            "earliest settlement",
+            base.earliest_settlement_timestamp == terms.earliest_settlement_timestamp,
+        ),
+        (
+            "user A settlement destination",
+            base.user_a_settlement_destination == terms.user_a_settlement_destination,
+        ),
+        (
+            "user B settlement destination",
+            base.user_b_settlement_destination == terms.user_b_settlement_destination,
+        ),
+    ] {
+        if !matches {
+            return Err(ConfidentialError::Account(field));
+        }
+    }
+    Ok(VerifiedConfidentialTerms {
+        swap_address,
+        swap,
+        escrow_b,
+        state,
+    })
+}
+
 /// Query both exact account sizes. Every result is checked against its owner and
 /// canonical PDA before being returned; unrelated or malformed accounts are skipped.
 /// RPC failures still propagate. Fetch escrow snapshots separately for
