@@ -1,7 +1,7 @@
 use dvp_swap_program_client::{
     confidential::{
-        mint_auditor, settle_session, BalanceEvent, ConfidentialError, EscrowKeys, SessionConfig,
-        SettleRequest, TransactionSession, TransferSource,
+        mint_auditor, settle_session, BalanceEvent, ConfidentialError, EscrowKeys,
+        RecipientAccount, SessionConfig, SettleRequest, TransactionSession, TransferSource,
     },
     instructions::SettleConfidentialDvp,
     verify::verify_confidential_funding,
@@ -41,8 +41,16 @@ pub fn settle(
         keys,
         expected_amount_b,
     )?;
-    let recipient = super::recipient(snapshot.recipient, &swap.base.mint_b)?;
-    let surplus_recipient = super::recipient(snapshot.surplus_recipient, &swap.base.mint_b)?;
+    let recipient = RecipientAccount {
+        address: accounts.user_a_destination_ata_b,
+        owner: snapshot.recipient.owner,
+        data: &snapshot.recipient.data,
+    };
+    let surplus_recipient = RecipientAccount {
+        address: accounts.user_b_ata_b,
+        owner: snapshot.surplus_recipient.owner,
+        data: &snapshot.surplus_recipient.data,
+    };
     let auditor = mint_auditor(&snapshot.mint.owner, &snapshot.mint.data)?;
     settle_session(
         config,
@@ -55,8 +63,12 @@ pub fn settle(
             },
             swap: &swap,
             expected_amount_b,
-            recipient: &recipient,
-            surplus_recipient: &surplus_recipient,
+            recipient,
+            surplus_recipient,
+            // Pass recipient keys from the trade agreement to stop trusting
+            // the RPC for them.
+            expected_recipient: None,
+            expected_surplus_recipient: None,
             auditor: auditor.as_ref(),
         },
         leg_a_extras,

@@ -2,9 +2,10 @@ import { runSwap } from "../../../examples/confidential/swap";
 import { prepareSettlement } from "../../../examples/confidential/settle";
 import { getTokenDecoder } from "@solana-program/token-2022";
 import { address } from "@solana/kit";
+import { ElGamalKeypair } from "@solana/zk-sdk";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readEscrowBalance } from "../../confidential";
+import { readEscrowBalance, settleSession } from "../../confidential";
 import { AMOUNT_LO_BITS } from "../../confidential/constants";
 import { TestContext, execute } from "./context";
 import { createAndFund, fixture, fundAsset, fundEscrow } from "./utils";
@@ -122,3 +123,43 @@ for (const format of [1, 0] as const) {
     }
   });
 }
+
+test("Settle binds the recipient snapshot and expected key", async () => {
+  const context = new TestContext(),
+    f = await fixture(context, 1);
+  try {
+    await createAndFund(context, f);
+    const pubkey = f.recipientKeys.elgamal.pubkey(),
+      other = new ElGamalKeypair(),
+      otherPubkey = other.pubkey();
+    try {
+      const request = {
+        source: f.source(),
+        swap: f.swap(),
+        expectedAmountB: f.amount,
+        recipient: context.account(address(f.recipient))!,
+        surplusRecipient: context.account(f.common.userBAtaB)!,
+      };
+      await settleSession(f.config, f.settle, {
+        ...request,
+        expectedRecipient: pubkey.toBytes(),
+      });
+      for (const [override, message] of [
+        // A key other than the agreed one would receive the amount.
+        [{ expectedRecipient: otherPubkey.toBytes() }, /ElGamal key mismatch/],
+        // A snapshot of another account than the Settle destination.
+        [{ recipient: request.surplusRecipient }, /address or owner/],
+      ] as const)
+        await assert.rejects(
+          settleSession(f.config, f.settle, { ...request, ...override }),
+          { name: "ConfidentialError", code: "Account", message },
+        );
+    } finally {
+      pubkey.free();
+      otherPubkey.free();
+      other.free();
+    }
+  } finally {
+    f.close();
+  }
+});

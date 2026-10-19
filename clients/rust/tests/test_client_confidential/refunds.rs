@@ -87,7 +87,7 @@ fn client_partial_reclaim_then_full_in_both_formats() {
         let partial = MAX_TRANSFER_AMOUNT;
         for amount in [RefundAmount::Partial(partial), RefundAmount::Full] {
             let source = f.source(&context);
-            let recipient = state(&context, &f.refund);
+            let recipient = context.get_account(&f.refund).unwrap();
             let session = refund_session(
                 &f.config,
                 RefundInstruction::Reclaim(reclaim_leg_b_accounts(&f)),
@@ -97,7 +97,8 @@ fn client_partial_reclaim_then_full_in_both_formats() {
                         keys: &f.keys,
                         history: &[],
                     },
-                    recipient: &recipient,
+                    recipient: crate::utils::recipient_account(f.refund, &recipient),
+                    expected_recipient: None,
                     amount,
                     auditor: None,
                 }),
@@ -204,7 +205,7 @@ fn client_cancel_reject_and_recover_in_both_formats() {
 
             // Send all proof preparations before the late credit arrives.
             let source = f.source(&context);
-            let recipient = state(&context, &f.refund);
+            let recipient = context.get_account(&f.refund).unwrap();
             let session = refund_session(
                 &f.config,
                 instruction,
@@ -214,7 +215,8 @@ fn client_cancel_reject_and_recover_in_both_formats() {
                         keys: &f.keys,
                         history: &[],
                     },
-                    recipient: &recipient,
+                    recipient: crate::utils::recipient_account(f.refund, &recipient),
+                    expected_recipient: None,
                     amount,
                     auditor: None,
                 }),
@@ -269,7 +271,7 @@ fn client_cancel_reject_and_recover_in_both_formats() {
             // Recover Full returns the late credit plus any remainder from Partial Cancel.
             // The tombstone and original terms identify the already closed swap.
             let source = f.source(&context);
-            let recipient = state(&context, &f.refund);
+            let recipient = context.get_account(&f.refund).unwrap();
             let accounts = RecoverConfidentialDvp {
                 signer: f.dvp.user_b.pubkey(),
                 swap_dvp: f.dvp.accounts.swap_dvp,
@@ -304,7 +306,8 @@ fn client_cancel_reject_and_recover_in_both_formats() {
                         keys: &f.keys,
                         history: &[],
                     },
-                    recipient: &recipient,
+                    recipient: crate::utils::recipient_account(f.refund, &recipient),
+                    expected_recipient: None,
                     amount: RefundAmount::Full,
                     auditor: None,
                 }),
@@ -316,7 +319,7 @@ fn client_cancel_reject_and_recover_in_both_formats() {
 
             // Full drained the confidential funds; None withdraws public tokens and closes escrow.
             let source = f.source(&context);
-            let recipient = state(&context, &f.refund);
+            let recipient = context.get_account(&f.refund).unwrap();
             let accounts = RecoverConfidentialDvp {
                 signer: f.dvp.user_b.pubkey(),
                 swap_dvp: f.dvp.accounts.swap_dvp,
@@ -350,7 +353,8 @@ fn client_cancel_reject_and_recover_in_both_formats() {
                         keys: &f.keys,
                         history: &[],
                     },
-                    recipient: &recipient,
+                    recipient: crate::utils::recipient_account(f.refund, &recipient),
+                    expected_recipient: None,
                     amount: RefundAmount::None,
                     auditor: None,
                 }),
@@ -415,6 +419,95 @@ fn none_refund_does_not_need_a_readable_balance() {
 }
 
 #[test]
+fn refund_binds_the_recipient_snapshot() {
+    let keys = refund_keys();
+    let source = ConfidentialTransferAccount {
+        elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
+        available_balance: keys.elgamal.pubkey().encrypt(AMOUNT_B).into(),
+        decryptable_available_balance: keys.ae.encrypt(AMOUNT_B).into(),
+        ..Default::default()
+    };
+    let recipient_keys = EscrowKeys::from_seed(&[22; 32]).unwrap();
+    let other = EscrowKeys::from_seed(&[23; 32]).unwrap();
+    let (mint, destination) = (Pubkey::new_unique(), Pubkey::new_unique());
+    let ct = ConfidentialTransferAccount {
+        elgamal_pubkey: (*recipient_keys.elgamal.pubkey()).into(),
+        approved: true.into(),
+        allow_confidential_credits: true.into(),
+        maximum_pending_balance_credit_counter: 1.into(),
+        ..Default::default()
+    };
+    let account = crate::utils::ct_token_account(mint, ct);
+    let mut system_owned = account.clone();
+    system_owned.owner = Pubkey::default();
+    let other_mint = crate::utils::ct_token_account(Pubkey::new_unique(), ct);
+    let config = SessionConfig::new(
+        Pubkey::new_unique(),
+        TransactionFormat::V1,
+        Default::default(),
+    );
+    let refund = |recipient, expected_recipient| {
+        refund_session(
+            &config,
+            RefundInstruction::Reclaim(ReclaimConfidentialDvp {
+                signer: config.payer,
+                swap_dvp: Pubkey::new_unique(),
+                mint,
+                dvp_source_ata: Pubkey::new_unique(),
+                signer_dest_ata: destination,
+                token_program: TOKEN,
+                memo_program: MEMO_PROGRAM_ID,
+                zk_elgamal_proof_program: solana_zk_elgamal_proof_interface::ID,
+                equality_context: None,
+                validity_context: None,
+                range_context: None,
+                zero_context: None,
+            }),
+            Some(RefundRequest {
+                source: TransferSource {
+                    state: &source,
+                    keys: &keys,
+                    history: &[],
+                },
+                recipient,
+                expected_recipient,
+                amount: RefundAmount::Partial(1),
+                auditor: None,
+            }),
+            &[],
+            &[],
+        )
+    };
+    let bound = crate::utils::recipient_account(destination, &account);
+
+    assert!(refund(bound, None).is_ok());
+    assert!(refund(bound, Some(recipient_keys.elgamal.pubkey())).is_ok());
+    for (recipient, expected, error) in [
+        (
+            crate::utils::recipient_account(Pubkey::new_unique(), &account),
+            None,
+            "recipient address or owner",
+        ),
+        (
+            crate::utils::recipient_account(destination, &system_owned),
+            None,
+            "recipient address or owner",
+        ),
+        (
+            crate::utils::recipient_account(destination, &other_mint),
+            None,
+            "recipient mint",
+        ),
+        (bound, Some(other.elgamal.pubkey()), "recipient ElGamal key"),
+    ] {
+        assert!(matches!(
+            refund(recipient, expected),
+            Err(ConfidentialError::Account(message)) if message == error
+        ));
+    }
+}
+
+#[test]
 fn refund_rejects_full_above_transfer_limit() {
     assert!(matches!(
         refund_from_snapshot(MAX_TRANSFER_AMOUNT + 1, RefundAmount::Full),
@@ -476,12 +569,14 @@ fn refund_from_state(
         maximum_pending_balance_credit_counter: 1.into(),
         ..Default::default()
     };
+    let (mint, destination) = (Pubkey::new_unique(), Pubkey::new_unique());
+    let recipient = crate::utils::ct_token_account(mint, recipient);
     let accounts = ReclaimConfidentialDvp {
         signer: config.payer,
         swap_dvp: Pubkey::new_unique(),
-        mint: Pubkey::new_unique(),
+        mint,
         dvp_source_ata: Pubkey::new_unique(),
-        signer_dest_ata: Pubkey::new_unique(),
+        signer_dest_ata: destination,
         token_program: TOKEN,
         memo_program: MEMO_PROGRAM_ID,
         zk_elgamal_proof_program: solana_zk_elgamal_proof_interface::ID,
@@ -499,7 +594,8 @@ fn refund_from_state(
                 keys: &keys,
                 history: &[],
             },
-            recipient: &recipient,
+            recipient: crate::utils::recipient_account(destination, &recipient),
+            expected_recipient: None,
             amount,
             auditor: None,
         }),

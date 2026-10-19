@@ -506,3 +506,46 @@ pub fn cleanup(
         );
     }
 }
+
+/// A fetched token account as a session recipient bound to `address`.
+pub fn recipient_account(address: Pubkey, account: &Account) -> RecipientAccount<'_> {
+    RecipientAccount {
+        address,
+        owner: account.owner,
+        data: &account.data,
+    }
+}
+
+/// A Token-2022 account for `mint` holding only the given CT extension, for
+/// session tests that need a recipient snapshot without ledger setup.
+pub fn ct_token_account(mint: Pubkey, ct: ConfidentialTransferAccount) -> Account {
+    use spl_token_2022_interface::{
+        extension::{BaseStateWithExtensionsMut, ExtensionType, StateWithExtensionsMut},
+        state::{Account as TokenAccount, AccountState},
+    };
+    let len = ExtensionType::try_calculate_account_len::<TokenAccount>(&[
+        ExtensionType::ConfidentialTransferAccount,
+    ])
+    .unwrap();
+    let mut data = vec![0; len];
+    let mut state =
+        StateWithExtensionsMut::<TokenAccount>::unpack_uninitialized(&mut data).unwrap();
+    state.base = TokenAccount {
+        mint,
+        owner: Pubkey::new_unique(),
+        state: AccountState::Initialized,
+        ..Default::default()
+    };
+    state.pack_base();
+    state.init_account_type().unwrap();
+    *state
+        .init_extension::<ConfidentialTransferAccount>(true)
+        .unwrap() = ct;
+    Account {
+        lamports: 1,
+        data,
+        owner: TOKEN,
+        executable: false,
+        rent_epoch: 0,
+    }
+}

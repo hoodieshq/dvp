@@ -1,9 +1,15 @@
 import {
   downgradeRoleToNonSigner,
+  getAddressEncoder,
   type AccountMeta,
   type Address,
+  type EncodedAccount,
   type Instruction,
 } from "@solana/kit";
+import {
+  getTokenDecoder,
+  TOKEN_2022_PROGRAM_ADDRESS,
+} from "@solana-program/token-2022";
 import { getVerifyProofInstruction } from "@solana-program/zk-elgamal-proof";
 import {
   CiphertextCiphertextEqualityProofData,
@@ -35,6 +41,7 @@ import {
   readEscrowBalance,
   recoverEscrowBalance,
   checkEscrowKeys,
+  confidentialState,
   type BalanceEvent,
   type ConfidentialTransferAccount,
 } from "./balance";
@@ -165,8 +172,15 @@ export type SettleRequest = Readonly<{
   source: TransferSource<EscrowKeys>;
   swap: ConfidentialSwapDvp;
   expectedAmountB: bigint;
-  recipient: ConfidentialTransferAccount;
-  surplusRecipient: ConfidentialTransferAccount;
+  /** Fetched recipient token accounts, bound to the Settle destinations. */
+  recipient: EncodedAccount;
+  surplusRecipient: EncodedAccount;
+  /**
+   * Recipient ElGamal keys from the trade agreement. When omitted, the key
+   * read from the recipient snapshot is trusted.
+   */
+  expectedRecipient?: Uint8Array;
+  expectedSurplusRecipient?: Uint8Array;
   auditor?: Uint8Array;
 }>;
 
@@ -215,8 +229,24 @@ export async function settleSession(
   // Payment and surplus each add one credit when they share the same recipient.
   const paymentCredits =
     surplus > 0n && input.userADestinationAtaB === input.userBAtaB ? 2n : 1n;
-  checkRecipient(request.recipient, paymentCredits);
-  if (surplus > 0n) checkRecipient(request.surplusRecipient, paymentCredits);
+  const mint = request.swap.base.mintB;
+  const recipient = readRecipient(
+    request.recipient,
+    input.userADestinationAtaB,
+    mint,
+    request.expectedRecipient,
+  );
+  checkRecipient(recipient, paymentCredits);
+  const surplusRecipient =
+    surplus > 0n
+      ? readRecipient(
+          request.surplusRecipient,
+          input.userBAtaB,
+          mint,
+          request.expectedSurplusRecipient,
+        )
+      : undefined;
+  if (surplusRecipient) checkRecipient(surplusRecipient, paymentCredits);
   const session = new SessionBuilder(config, input.settlementAuthority);
   const payment = await prepareTransfer(
     session,
@@ -224,7 +254,7 @@ export async function settleSession(
     new Uint8Array(source.state.availableBalance),
     balance,
     request.expectedAmountB,
-    request.recipient,
+    recipient,
     request.auditor,
   );
   const [paymentEqualityContext, paymentValidityContext, paymentRangeContext] =
@@ -259,18 +289,17 @@ export async function settleSession(
       pubkey.free();
     }
   }
-  const refund =
-    surplus > 0n
-      ? await prepareTransfer(
-          session,
-          source.keys,
-          payment.remaining,
-          surplus,
-          surplus,
-          request.surplusRecipient,
-          request.auditor,
-        )
-      : undefined;
+  const refund = surplusRecipient
+    ? await prepareTransfer(
+        session,
+        source.keys,
+        payment.remaining,
+        surplus,
+        surplus,
+        surplusRecipient,
+        request.auditor,
+      )
+    : undefined;
   const remaining = parseCiphertext(refund?.remaining ?? payment.remaining);
   const zero = new ZeroCiphertextProofData(source.keys.elgamal, remaining);
   let zeroContext: Address;
@@ -335,7 +364,10 @@ export type RefundAmount =
   | { kind: "partial"; amount: bigint };
 export type RefundRequest = Readonly<{
   source: TransferSource;
-  recipient: ConfidentialTransferAccount;
+  /** Fetched refund destination token account. */
+  recipient: EncodedAccount;
+  /** When omitted, the key read from the recipient snapshot is trusted. */
+  expectedRecipient?: Uint8Array;
   amount: RefundAmount;
   auditor?: Uint8Array;
 }>;
@@ -383,13 +415,22 @@ export async function refundSession(
           "ZeroPartialRefund",
           "Partial refund must be nonzero",
         );
+      const [destination, mint] =
+        instruction.kind === "cancel" || instruction.kind === "reject"
+          ? [instruction.input.userBAtaB, instruction.input.mintB]
+          : [instruction.input.signerDestAta, instruction.input.mint];
       const transfer = await prepareTransfer(
         session,
         source.keys,
         new Uint8Array(source.state.availableBalance),
         balance,
         amount,
-        request.recipient,
+        readRecipient(
+          request.recipient,
+          destination,
+          mint,
+          request.expectedRecipient,
+        ),
         request.auditor,
       );
       [equalityContext, validityContext, rangeContext] = transfer.contexts;
@@ -457,4 +498,31 @@ export async function refundSession(
       break;
   }
   return session.finish([appendExtras(ix, extras)]);
+}
+
+function readRecipient(
+  account: EncodedAccount,
+  destination: Address,
+  mint: Address,
+  expected?: Uint8Array,
+): ConfidentialTransferAccount {
+  if (
+    account.address !== destination ||
+    account.programAddress !== TOKEN_2022_PROGRAM_ADDRESS
+  )
+    throw new ConfidentialError("Account", "Wrong recipient address or owner");
+  const token = getTokenDecoder().decode(account.data);
+  if (token.mint !== mint)
+    throw new ConfidentialError("Account", "Wrong recipient mint");
+  const state = confidentialState(token);
+  // An unauthenticated key would receive the amount; refuse before any proof.
+  if (
+    expected &&
+    !bytesEqual(
+      new Uint8Array(getAddressEncoder().encode(state.elgamalPubkey)),
+      expected,
+    )
+  )
+    throw new ConfidentialError("Account", "Recipient ElGamal key mismatch");
+  return state;
 }

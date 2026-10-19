@@ -4,9 +4,7 @@ import {
   type GetMultipleAccountsApi,
   type Rpc,
 } from "@solana/kit";
-import { getTokenDecoder } from "@solana-program/token-2022";
 import {
-  confidentialState,
   mintAuditor,
   settleSession,
   verifyConfidentialFunding,
@@ -57,8 +55,11 @@ export async function prepareSettlement(
     source: { state: checked.state, keys },
     swap: checked.swap,
     expectedAmountB: expectedAmount,
-    recipient: confidentialState(getTokenDecoder().decode(recipient.data)),
-    surplusRecipient: confidentialState(getTokenDecoder().decode(refund.data)),
+    // The session binds both snapshots to the Settle destinations and mint B.
+    // Pass expectedRecipient/expectedSurplusRecipient from the trade agreement
+    // to stop trusting the RPC for the recipient keys.
+    recipient,
+    surplusRecipient: refund,
     auditor: mintAuditor(mint),
   });
 }

@@ -1,7 +1,7 @@
 use dvp_swap_program_client::confidential::{
     mint_auditor, read_escrow_account, refund_session, BalanceEvent, ConfidentialError, EscrowKeys,
-    RefundAmount, RefundInstruction, RefundRequest, SessionConfig, TransactionSession,
-    TransferSource,
+    RecipientAccount, RefundAmount, RefundInstruction, RefundRequest, SessionConfig,
+    TransactionSession, TransferSource,
 };
 use solana_account::Account;
 use solana_instruction::AccountMeta;
@@ -24,14 +24,15 @@ pub fn refund(
     leg_a_extras: &[AccountMeta],
     leg_b_extras: &[AccountMeta],
 ) -> Result<TransactionSession, ConfidentialError> {
-    let (swap, mint, source) = match &instruction {
-        RefundInstruction::Reclaim(a) => (a.swap_dvp, a.mint, a.dvp_source_ata),
-        RefundInstruction::Cancel(a) => (a.swap_dvp, a.mint_b, a.dvp_ata_b),
-        RefundInstruction::Reject(a) => (a.swap_dvp, a.mint_b, a.dvp_ata_b),
-        RefundInstruction::Recover(a, _) => (a.swap_dvp, a.mint, a.dvp_escrow_ata),
+    let (swap, mint, source, dest) = match &instruction {
+        RefundInstruction::Reclaim(a) => (a.swap_dvp, a.mint, a.dvp_source_ata, a.signer_dest_ata),
+        RefundInstruction::Cancel(a) => (a.swap_dvp, a.mint_b, a.dvp_ata_b, a.user_b_ata_b),
+        RefundInstruction::Reject(a) => (a.swap_dvp, a.mint_b, a.dvp_ata_b, a.user_b_ata_b),
+        RefundInstruction::Recover(a, _) => {
+            (a.swap_dvp, a.mint, a.dvp_escrow_ata, a.signer_dest_ata)
+        }
     };
     let (state, _) = read_escrow_account(&source, &escrow.owner, &escrow.data, &swap, &mint)?;
-    let recipient = super::recipient(destination, &mint)?;
     let auditor = mint_auditor(&mint_account.owner, &mint_account.data)?;
     refund_session(
         config,
@@ -42,7 +43,14 @@ pub fn refund(
                 keys,
                 history,
             },
-            recipient: &recipient,
+            recipient: RecipientAccount {
+                address: dest,
+                owner: destination.owner,
+                data: &destination.data,
+            },
+            // The refund goes to the signer's own account; pass its key to
+            // stop trusting the RPC for it.
+            expected_recipient: None,
             amount,
             auditor: auditor.as_ref(),
         }),

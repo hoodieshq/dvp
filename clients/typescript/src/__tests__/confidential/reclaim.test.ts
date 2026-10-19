@@ -26,7 +26,7 @@ test("Partial Reclaim followed by Full Reclaim (v0)", async () => {
         { kind: "reclaim", input: f.reclaim },
         {
           source: f.source(),
-          recipient: f.state(f.common.userBAtaB),
+          recipient: context.account(f.common.userBAtaB)!,
           amount: { kind: "partial", amount: partial },
         },
       ),
@@ -106,7 +106,7 @@ test("None refund does not need a readable balance", async () => {
       { kind: "reclaim", input: f.reclaim },
       {
         source: { state, keys: f.keys },
-        recipient: f.state(f.common.userBAtaB),
+        recipient: context.account(f.common.userBAtaB)!,
         amount: { kind: "none" },
       },
     );

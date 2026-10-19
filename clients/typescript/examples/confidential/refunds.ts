@@ -4,9 +4,7 @@ import {
   type GetMultipleAccountsApi,
   type Rpc,
 } from "@solana/kit";
-import { getTokenDecoder } from "@solana-program/token-2022";
 import {
-  confidentialState,
   mintAuditor,
   readEscrowAccount,
   refundSession,
@@ -54,7 +52,9 @@ export async function prepareRefund(
     instruction,
     {
       source: { state, keys, history },
-      recipient: confidentialState(getTokenDecoder().decode(recipient.data)),
+      // Bound to the refund destination and mint; pass expectedRecipient to
+      // stop trusting the RPC for the destination key.
+      recipient,
       amount,
       auditor: mintAuditor(mintAccount),
     },

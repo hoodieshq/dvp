@@ -119,7 +119,13 @@ wallet-to-escrow funding, use Token-2022's confidential transfer helpers from
 The test suite's funding wrapper is private to `__tests__/confidential/utils.ts`.
 Settle requires the checked confidential swap, agreed amount and both recipient
 snapshots. It checks combined credit capacity when payment and surplus share a
-recipient.
+recipient. Settle and refund requests take each recipient as the fetched
+`EncodedAccount`; the session checks that it is the instruction's destination,
+owned by Token-2022 and of mint B before reading its ElGamal key.
+`expectedRecipient` (and `expectedSurplusRecipient` for Settle) optionally pin
+the 32-byte keys from the trade agreement; on a mismatch the session fails
+before building any proof. Without them the RPC is trusted for recipient keys,
+as in any Token-2022 wallet (spec section 10).
 
 Confirm preparations sequentially, then the final transaction. Obtain a fresh
 blockhash for each send; `PlannedTransaction.sign` includes temporary account

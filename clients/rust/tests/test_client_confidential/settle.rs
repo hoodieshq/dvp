@@ -131,8 +131,8 @@ fn settle_rejects_wrong_amount_or_keys() {
     let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B);
     let source = f.source(&context);
     let swap = f.swap(&context);
-    let recipient = state(&context, &f.recipient);
-    let refund = state(&context, &f.refund);
+    let recipient = context.get_account(&f.recipient).unwrap();
+    let refund = context.get_account(&f.refund).unwrap();
     let build = |keys, expected_amount_b| {
         settle_session(
             &f.config,
@@ -145,8 +145,10 @@ fn settle_rejects_wrong_amount_or_keys() {
                 },
                 swap: &swap,
                 expected_amount_b,
-                recipient: &recipient,
-                surplus_recipient: &refund,
+                recipient: crate::utils::recipient_account(f.recipient, &recipient),
+                surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
+                expected_recipient: None,
+                expected_surplus_recipient: None,
                 auditor: None,
             },
             &[],
@@ -162,6 +164,66 @@ fn settle_rejects_wrong_amount_or_keys() {
     assert!(matches!(
         build(&wrong_keys, AMOUNT_B),
         Err(ConfidentialError::EscrowKeyMismatch)
+    ));
+}
+
+#[test]
+fn settle_binds_recipient_snapshots_and_expected_keys() {
+    let mut context = TestContext::new();
+    let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B + 7);
+    let source = f.source(&context);
+    let swap = f.swap(&context);
+    let recipient = context.get_account(&f.recipient).unwrap();
+    let refund = context.get_account(&f.refund).unwrap();
+    let other = Keys::new();
+    let build = |payment, expected_recipient, expected_surplus_recipient| {
+        settle_session(
+            &f.config,
+            f.settle_accounts(),
+            SettleRequest {
+                source: TransferSource {
+                    state: &source,
+                    keys: &f.keys,
+                    history: &[],
+                },
+                swap: &swap,
+                expected_amount_b: AMOUNT_B,
+                recipient: payment,
+                surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
+                expected_recipient,
+                expected_surplus_recipient,
+                auditor: None,
+            },
+            &[],
+            &[],
+        )
+    };
+    let payment = crate::utils::recipient_account(f.recipient, &recipient);
+
+    assert!(build(
+        payment,
+        Some(f.recipient_keys.elgamal.pubkey()),
+        Some(f.buyer_keys.elgamal.pubkey())
+    )
+    .is_ok());
+    // A key other than the agreed one would receive the amount.
+    for (expected_recipient, expected_surplus_recipient) in [
+        (Some(other.elgamal.pubkey()), None),
+        (None, Some(other.elgamal.pubkey())),
+    ] {
+        assert!(matches!(
+            build(payment, expected_recipient, expected_surplus_recipient),
+            Err(ConfidentialError::Account("recipient ElGamal key"))
+        ));
+    }
+    // A snapshot of another account than the instruction's destination.
+    assert!(matches!(
+        build(
+            crate::utils::recipient_account(f.refund, &refund),
+            None,
+            None
+        ),
+        Err(ConfidentialError::Account("recipient address or owner"))
     ));
 }
 
@@ -199,7 +261,7 @@ fn combined_recipient_session(
     f: &ClientFixture,
 ) -> Result<TransactionSession, ConfidentialError> {
     let source = f.source(context);
-    let recipient = state(context, &f.refund);
+    let recipient = context.get_account(&f.refund).unwrap();
     let swap = f.swap(context);
     settle_session(
         &f.config,
@@ -212,8 +274,10 @@ fn combined_recipient_session(
             },
             swap: &swap,
             expected_amount_b: AMOUNT_B,
-            recipient: &recipient,
-            surplus_recipient: &recipient,
+            recipient: crate::utils::recipient_account(f.refund, &recipient),
+            surplus_recipient: crate::utils::recipient_account(f.refund, &recipient),
+            expected_recipient: None,
+            expected_surplus_recipient: None,
             auditor: None,
         },
         &[],

@@ -77,13 +77,20 @@ incoming credits when payment and surplus use the same destination account.
 | --- | --- |
 | `create_session` | Generated Create accounts/terms, keys and agreed amount; inserts ciphertexts, decryptable zero and the inline pubkey proof. |
 | `apply_session` | Generated Apply accounts/seed terms and `TransferSource`; computes the actual pending counter and correct new AE balance. |
-| `settle_session` | Checked confidential swap, agreed amount, escrow and both recipients; prepares payment, amount-binding, optional surplus and zero proofs. |
+| `settle_session` | Checked confidential swap, agreed amount, escrow and both recipient snapshots; prepares payment, amount-binding, optional surplus and zero proofs. |
 | `refund_session` | `RefundInstruction` wrapping generated Reclaim/Cancel/Reject/Recover accounts and optional `RefundRequest`; prepares `Partial`/`Full` proofs or `None` without proofs. |
 
 Funding is an ordinary SPL Token-2022 wallet transfer to the verified escrow.
 Use the SPL SDK for it; the DvP client does not expose a generic transfer builder.
 
 `TransferSource` contains the CT snapshot, its keys and recovered history events.
+Settle and refund requests take each recipient as a `RecipientAccount` (address,
+owner and data as fetched). The session checks that it is the instruction's
+destination, owned by Token-2022 and of the leg B mint before reading its
+ElGamal key. `expected_recipient` (and `expected_surplus_recipient` for Settle)
+optionally pin the keys from the trade agreement; on a mismatch the session
+fails before building any proof. Without them the RPC is trusted for recipient
+keys, as in any Token-2022 wallet (spec section 10).
 Read the mint's optional auditor with `mint_auditor`. For confidential transfers,
 resolve leg B hook extras with `resolve_confidential_hook_accounts`, which uses
 `u64::MAX` and strips signer flags. The validation account is optional: when
