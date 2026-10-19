@@ -136,6 +136,7 @@ fn verify_confidential_terms_compares_every_public_term() {
     let terms = f.expected_terms(AMOUNT_B);
     let checked = verify_confidential_terms(&swap, &escrow, &f.keys, &terms).unwrap();
     assert_eq!(checked.swap_address, f.dvp.accounts.swap_dvp);
+    assert_eq!(checked.escrow_a, f.dvp.accounts.dvp_ata_a);
     assert_eq!(checked.escrow_b, f.dvp.accounts.dvp_ata_b);
 
     let other = solana_pubkey::Pubkey::new_unique();

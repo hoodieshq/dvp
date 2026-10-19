@@ -67,8 +67,9 @@ and AE/ElGamal balance agreement. A foreign ElGamal key throws
 Before funding or settling, prefer `verifyConfidentialTerms(rawSwap, rawEscrow,
 keys, terms)` with the agreed `ExpectedConfidentialTerms`: it also requires the
 swap at the PDA of those terms and compares token program A, amount A, expiry,
-earliest settlement time and both resolved destinations. The swap and settle
-examples use it. `readEscrowAccount` and `verifyConfidentialSwap` expose
+earliest settlement time and both resolved destinations. It returns both
+canonical escrows, `escrowA` and `escrowB`; fund those rather than addresses
+taken from counterparty metadata. The swap and settle examples use it. `readEscrowAccount` and `verifyConfidentialSwap` expose
 the individual checks when accounts have already been fetched and verified.
 
 ## Sessions

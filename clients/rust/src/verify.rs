@@ -309,12 +309,14 @@ pub struct ExpectedConfidentialTerms {
     pub user_b_settlement_destination: Pubkey,
 }
 
-/// Swap and escrow B checked against [`ExpectedConfidentialTerms`].
+/// Swap and escrow B checked against [`ExpectedConfidentialTerms`], with both
+/// canonical escrow addresses. Fund these, not counterparty-supplied addresses.
 #[cfg(all(feature = "fetch", feature = "confidential"))]
 #[derive(Clone, Debug)]
 pub struct VerifiedConfidentialTerms {
     pub swap_address: Pubkey,
     pub swap: ConfidentialSwapDvp,
+    pub escrow_a: Pubkey,
     pub escrow_b: Pubkey,
     pub state:
         spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferAccount,
@@ -377,6 +379,7 @@ pub fn verify_confidential_terms(
     Ok(VerifiedConfidentialTerms {
         swap_address,
         swap,
+        escrow_a: find_swap_dvp_escrow_ata(&swap_address, &terms.mint_a, &terms.token_program_a),
         escrow_b,
         state,
     })

@@ -76,9 +76,10 @@ export async function runSwap(
     terms,
     config.programAddress,
   );
+  // Fund the canonical escrows derived from the agreed terms.
   await wallet.fund({
-    escrowA: accounts.create.dvpAtaA,
-    escrowB: accounts.create.dvpAtaB,
+    escrowA: checked.escrowA,
+    escrowB: checked.escrowB,
     amountA: terms.amountA,
     amountB: terms.amountB,
     recipient: checked.state,

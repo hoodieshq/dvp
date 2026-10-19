@@ -1,6 +1,7 @@
 import { isSome, type Address, type EncodedAccount } from "@solana/kit";
 import {
   decodeSwapDvpChecked,
+  findSwapDvpEscrowAta,
   findSwapDvpPda,
   SwapDvpVerificationError,
 } from "../verify";
@@ -98,5 +99,11 @@ export async function verifyConfidentialTerms(
     ],
   ] as const)
     if (!matches) throw new ConfidentialError("Account", `Wrong ${field}`);
-  return { ...checked, swapAddress, escrowB: rawEscrow.address };
+  // Fund these canonical escrows, not counterparty-supplied addresses.
+  const [escrowA] = await findSwapDvpEscrowAta({
+    swapDvp: swapAddress,
+    mint: terms.mintA,
+    tokenProgram: terms.tokenProgramA,
+  });
+  return { ...checked, swapAddress, escrowA, escrowB: rawEscrow.address };
 }

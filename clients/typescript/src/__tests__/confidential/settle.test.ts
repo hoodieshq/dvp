@@ -223,6 +223,7 @@ test("verifyConfidentialTerms compares every public term", async () => {
       f.terms,
     );
     assert.equal(checked.swapAddress, f.common.swapDvp);
+    assert.equal(checked.escrowA, f.common.dvpAtaA);
     assert.equal(checked.escrowB, f.common.dvpAtaB);
     const other = f.common.dvpAtaA;
     for (const [change, field] of [

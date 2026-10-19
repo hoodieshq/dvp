@@ -58,8 +58,10 @@ compare public terms with an off-chain agreement. Before funding or settling,
 use `verify::verify_confidential_terms` with `ExpectedConfidentialTerms` for the
 agreed trade instead: it runs the same checks at the swap PDA and escrow B
 derived from those terms, then compares token program A, amount A, expiry,
-earliest settlement time and both resolved destinations. The funding and settle
-examples use it.
+earliest settlement time and both resolved destinations. It returns both
+canonical escrow addresses, `escrow_a` (from `token_program_a`) and `escrow_b`;
+fund those rather than addresses taken from counterparty metadata. The funding
+and settle examples use it.
 
 ## Transaction sessions
 
