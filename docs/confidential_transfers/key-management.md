@@ -77,6 +77,9 @@ recommended for the shared escrow:
 - Store the seed encrypted at rest, indexed by `swap_dvp`, separately from
   signing keys. Exclude it from logs, analytics and error reports. Derive escrow
   keys as needed; in TypeScript call `keys.free()` to release WASM allocations.
+- Never serialize, log or include escrow keys or their fields in error reports.
+  In Rust the `EscrowKeys` fields are public and the SDK `ElGamalKeypair`
+  serializes its secret.
 - Retain the seed until **escrow B is closed**, including Apply and Recover
   after settlement or swap closure. It can then be deleted if historical
   decryption is no longer needed. Deletion cannot revoke copies held by others.

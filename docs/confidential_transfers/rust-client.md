@@ -20,6 +20,9 @@ not part of the normal client API.
 `derive_shared_seed(swap, mac)` passes the protocol tag and swap address to the
 caller's HMAC-SHA256 callback. `EscrowKeys::from_seed` derives ElGamal, AE and
 the two deterministic openings; `encrypt_amount` accepts `1..=2^48-1`.
+`EscrowKeys` itself is neither `Debug` nor serializable, but its fields are
+public and the SDK `ElGamalKeypair` derives `Serialize`. Never serialize, log
+or include escrow keys or their fields in error reports.
 The shared fixtures are in `clients/test-vectors/confidential-amount-b.json`.
 Regenerate them explicitly with
 `cargo test -p dvp-swap-program-client --features confidential --lib regenerate_shared_vectors -- --ignored`.

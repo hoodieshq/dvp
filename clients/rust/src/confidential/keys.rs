@@ -23,7 +23,9 @@ pub fn derive_shared_seed<E>(
     mac(&message)
 }
 
-/// Secrets are intentionally not Debug or serializable.
+/// The wrapper derives neither Debug nor serde, but its fields are public and
+/// individually serializable (the SDK `ElGamalKeypair` derives `Serialize`).
+/// Never serialize, log or report them.
 pub struct EscrowKeys {
     pub elgamal: ElGamalKeypair,
     pub ae: AeKey,
