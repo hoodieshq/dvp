@@ -253,6 +253,33 @@ fn oversized_plan_returns_an_error() {
 }
 
 #[test]
+fn proof_accounts_reject_rent_above_the_default() {
+    use solana_zk_elgamal_proof_interface::instruction::ProofInstruction;
+    use solana_zk_sdk::zk_elgamal_proof_program::build_zero_ciphertext_proof_data;
+    let keys = EscrowKeys::from_seed(&[5; 32]).unwrap();
+    let zero =
+        build_zero_ciphertext_proof_data(&keys.elgamal, &keys.elgamal.pubkey().encrypt(0u64))
+            .unwrap();
+    let rent = |lamports_per_byte| Rent {
+        lamports_per_byte,
+        ..Default::default()
+    };
+    let default = Rent::default().lamports_per_byte;
+    // An untrusted Rent may overpay the payer's lamports to the authority,
+    // or overflow the rent calculation.
+    for (rent, accepted) in [
+        (rent(default), true),
+        (rent(default + 1), false),
+        (rent(u64::MAX), false),
+    ] {
+        let config = SessionConfig::new(Pubkey::new_unique(), TransactionFormat::V1, rent);
+        let result = super::transaction::SessionBuilder::new(&config, Pubkey::new_unique())
+            .proof(ProofInstruction::VerifyZeroCiphertext, &zero);
+        assert_eq!(result.is_ok(), accepted);
+    }
+}
+
+#[test]
 fn payer_and_authority_can_use_the_same_signer() {
     use solana_keypair::Keypair;
     use solana_signer::Signer;

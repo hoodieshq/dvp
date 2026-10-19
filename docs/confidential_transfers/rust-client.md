@@ -53,7 +53,8 @@ expiry and earliest settlement time with the agreed trade.
 ## Transaction sessions
 
 Construct `SessionConfig` with the fee payer, format, current cluster rent and
-active lookup tables for v0. The default limits are 400k CU and 4 MB of loaded
+active lookup tables for v0. Take rent from a trusted source: sessions reject a
+`Rent` that charges more than the default (mainnet) rent-exemption minimum. The default limits are 400k CU and 4 MB of loaded
 account data. Set `compute_unit_price: Some(price)` in micro-lamports per CU to
 include priority fees in every size check and proof-packing decision. V0 uses
 `SetComputeUnitPrice`; v1 stores `ceil(price * compute_unit_limit / 1_000_000)`

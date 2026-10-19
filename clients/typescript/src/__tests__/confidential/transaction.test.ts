@@ -24,6 +24,9 @@ import {
   type SessionConfig,
 } from "../../confidential";
 import { U64_MAX } from "../../confidential/constants";
+import { EscrowKeys } from "../../confidential/keys";
+import { ProofKind, SessionBuilder } from "../../confidential/transaction";
+import { PubkeyValidityProofData } from "@solana/zk-sdk";
 
 const lifetime = {
   blockhash: blockhash("11111111111111111111111111111111"),
@@ -145,5 +148,26 @@ test("RPC history rejects loaded addresses on legacy and v1 messages", async () 
         ),
       { code: "IncompleteHistory" },
     );
+  }
+});
+
+test("proof accounts reject rent above the default", async () => {
+  const keys = EscrowKeys.fromSeed(new Uint8Array(32).fill(5));
+  const proof = new PubkeyValidityProofData(keys.elgamal);
+  const payer = await generateKeyPairSigner();
+  // Mainnet rent: 6960 lamports per byte, including 128 bytes of overhead.
+  const mainnet = (space: number) => (128n + BigInt(space)) * 6960n;
+  // An untrusted callback may overpay the payer's lamports to the authority.
+  for (const [rent, accepted] of [
+    [mainnet, true],
+    [(space: number) => mainnet(space) + 1n, false],
+    [() => -1n, false],
+  ] as const) {
+    const session = new SessionBuilder(
+      { payer, format: 1, minimumBalanceForRentExemption: rent },
+      payer,
+    ).proof(ProofKind.Pubkey, proof);
+    if (accepted) await session;
+    else await assert.rejects(session, { code: "Transaction" });
   }
 });

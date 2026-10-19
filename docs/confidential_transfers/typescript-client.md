@@ -65,7 +65,9 @@ the individual checks when accounts have already been fetched and verified.
 ## Sessions
 
 Supply `SessionConfig` with a fee payer `TransactionSigner`, `format: 1` or `0`,
-a rent callback and active `lookupTables` for v0. For example:
+a rent callback and active `lookupTables` for v0. Take rent from a trusted
+source: sessions reject a value outside 0 to the default (mainnet)
+rent-exemption minimum. For example:
 
 ```ts
 const config: SessionConfig = {

@@ -253,6 +253,20 @@ impl<'a> SessionBuilder<'a> {
         Ok(())
     }
 
+    /// Rent comes from the caller's RPC. Proof contexts close to the
+    /// authority, so cap it at the default to keep the payer from overpaying.
+    fn rent_exempt(&self, space: usize) -> Result<u64, ConfidentialError> {
+        self.config
+            .rent
+            .try_minimum_balance(space)
+            .filter(|lamports| *lamports <= Rent::default().minimum_balance(space))
+            .ok_or_else(|| {
+                ConfidentialError::Transaction(format!(
+                    "rent for {space} bytes exceeds the default rent-exemption minimum"
+                ))
+            })
+    }
+
     pub(crate) fn proof<T: Pod + ZkProofData<U>, U: Pod>(
         &mut self,
         kind: ProofInstruction,
@@ -264,7 +278,7 @@ impl<'a> SessionBuilder<'a> {
         let create = solana_system_interface::instruction::create_account(
             &self.config.payer,
             &address,
-            self.config.rent.minimum_balance(space),
+            self.rent_exempt(space)?,
             space as u64,
             &solana_zk_elgamal_proof_interface::ID,
         );
@@ -285,7 +299,7 @@ impl<'a> SessionBuilder<'a> {
             let create_record = solana_system_interface::instruction::create_account(
                 &self.config.payer,
                 &record_address,
-                self.config.rent.minimum_balance(space),
+                self.rent_exempt(space)?,
                 space as u64,
                 &RECORD_PROGRAM_ID,
             );
