@@ -494,6 +494,170 @@ fn record_instruction(record: Pubkey, payer: Pubkey, data: RecordInstruction<'_>
 }
 
 // Mint/Burn setup and proof verification.
+/// Token-2022 v11 reads the instructions sysvar before the proof contexts
+/// whenever any Mint/Burn proof is inline, as for Transfer. With offsets
+/// `[0, 0, 1]` the validity context therefore follows the sysvar.
+#[test]
+fn history_replays_mint_and_burn_with_an_inline_range_proof() {
+    let mut context = TestContext::new();
+    let config = SessionConfig::new(
+        context.payer.pubkey(),
+        TransactionFormat::V1,
+        context.svm.get_sysvar(),
+    );
+    let supply = Keys::new();
+    let mint = create_confidential_mint(&mut context, &config, &supply);
+    let wallet = Keypair::new();
+    let keys = EscrowKeys::from_seed(&[20; 32]).unwrap();
+    let wallet_keys = Keys {
+        elgamal: keys.elgamal.clone(),
+        ae: keys.ae.clone(),
+    };
+    let account = create_wallet_account(&mut context, &wallet, &mint, &wallet_keys);
+    const MINT_AMOUNT: u64 = (3 << AMOUNT_LO_BITS) + 42;
+    const BURN_AMOUNT: u64 = (1 << AMOUNT_LO_BITS) + 1;
+    let inline = std::num::NonZeroI8::new(1).unwrap();
+
+    let proof = spl_token_confidential_transfer_proof_generation::mint::mint_split_proof_data(
+        &Default::default(),
+        MINT_AMOUNT,
+        0,
+        &supply.elgamal,
+        keys.elgamal.pubkey(),
+        None,
+    )
+    .unwrap();
+    let mut transactions = vec![];
+    let equality_context = proof_context(
+        &mut context,
+        &config,
+        ProofInstruction::VerifyCiphertextCommitmentEquality,
+        &proof.equality_proof_data,
+        &mut transactions,
+    );
+    let validity_context = proof_context(
+        &mut context,
+        &config,
+        ProofInstruction::VerifyBatchedGroupedCiphertext3HandlesValidity,
+        &proof
+            .ciphertext_validity_proof_data_with_ciphertext
+            .proof_data,
+        &mut transactions,
+    );
+    let ciphertext = &proof.ciphertext_validity_proof_data_with_ciphertext;
+    transactions.push(run(
+        &mut context,
+        &config,
+        vec![
+            mint_burn::inner_confidential_mint(
+                &TOKEN,
+                &account,
+                &mint,
+                &ciphertext.ciphertext_lo,
+                &ciphertext.ciphertext_hi,
+                &config.payer,
+                &[],
+                ProofLocation::ContextStateAccount(&equality_context),
+                ProofLocation::ContextStateAccount(&validity_context),
+                ProofLocation::InstructionOffset(inline, &proof.range_proof_data),
+                &supply.balance(MINT_AMOUNT),
+            )
+            .unwrap(),
+            ProofInstruction::VerifyBatchedRangeProofU128
+                .encode_verify_proof(None, &proof.range_proof_data),
+        ],
+        &[],
+    ));
+    let mut replay = BalanceHistory::new(account);
+    for tx in &transactions {
+        replay.push(tx).unwrap();
+    }
+    assert_eq!(
+        recover_escrow_balance(&state(&context, &account), 0, &keys, replay.events())
+            .unwrap()
+            .pending,
+        MINT_AMOUNT
+    );
+
+    let tx = run(
+        &mut context,
+        &config,
+        vec![ct::apply_pending_balance(
+            &TOKEN,
+            &account,
+            1,
+            &wallet_keys.balance(MINT_AMOUNT),
+            &wallet.pubkey(),
+            &[],
+        )
+        .unwrap()],
+        &[&wallet],
+    );
+    replay.push(&tx).unwrap();
+
+    let current = state(&context, &account);
+    let burn = spl_token_confidential_transfer_proof_generation::burn::burn_split_proof_data(
+        &current.available_balance.try_into().unwrap(),
+        &keys.ae.encrypt(MINT_AMOUNT),
+        BURN_AMOUNT,
+        &keys.elgamal,
+        &keys.ae,
+        supply.elgamal.pubkey(),
+        None,
+    )
+    .unwrap();
+    let mut transactions = vec![];
+    let equality_context = proof_context(
+        &mut context,
+        &config,
+        ProofInstruction::VerifyCiphertextCommitmentEquality,
+        &burn.equality_proof_data,
+        &mut transactions,
+    );
+    let validity_context = proof_context(
+        &mut context,
+        &config,
+        ProofInstruction::VerifyBatchedGroupedCiphertext3HandlesValidity,
+        &burn
+            .ciphertext_validity_proof_data_with_ciphertext
+            .proof_data,
+        &mut transactions,
+    );
+    let ciphertext = &burn.ciphertext_validity_proof_data_with_ciphertext;
+    transactions.push(run(
+        &mut context,
+        &config,
+        vec![
+            mint_burn::inner_confidential_burn(
+                &TOKEN,
+                &account,
+                &mint,
+                &wallet_keys.balance(MINT_AMOUNT - BURN_AMOUNT),
+                &ciphertext.ciphertext_lo,
+                &ciphertext.ciphertext_hi,
+                &wallet.pubkey(),
+                &[],
+                ProofLocation::ContextStateAccount(&equality_context),
+                ProofLocation::ContextStateAccount(&validity_context),
+                ProofLocation::InstructionOffset(inline, &burn.range_proof_data),
+            )
+            .unwrap(),
+            ProofInstruction::VerifyBatchedRangeProofU128
+                .encode_verify_proof(None, &burn.range_proof_data),
+        ],
+        &[&wallet],
+    ));
+    for tx in &transactions {
+        replay.push(tx).unwrap();
+    }
+    assert_eq!(
+        recover_escrow_balance(&state(&context, &account), 0, &keys, replay.events())
+            .unwrap()
+            .available,
+        MINT_AMOUNT - BURN_AMOUNT
+    );
+}
+
 fn create_confidential_mint(
     context: &mut TestContext,
     config: &SessionConfig,
