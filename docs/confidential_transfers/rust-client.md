@@ -144,7 +144,8 @@ Transactions sharing a slot must follow their actual block order. Include only
 history through the snapshot being checked. After a decoding error, discard the
 `BalanceHistory` instance; `push` may already have applied part of that transaction.
 `from_rpc` does not verify signatures, and the RPC fields replay depends on are
-unsigned. A dishonest RPC can block recovery but cannot produce a false balance
+unsigned. A missing inner-instruction group reads as an instruction without
+CPIs. A dishonest RPC can block recovery but cannot produce a false balance
 (spec section 10); take history from a trusted or cross-checked source.
 
 Replay incoming transfers and ConfidentialMint into pending low/high balances,
