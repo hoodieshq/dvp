@@ -199,9 +199,9 @@ feed them to `BalanceHistory.push`. Failed transactions are ignored; historical
 v0 loaded addresses and complete inner-instruction metadata are required.
 `executedTransactionFromRpc` does not verify signatures, and the RPC fields
 replay depends on are unsigned. A missing inner-instruction group reads as an
-instruction without CPIs. A dishonest RPC can block recovery but cannot
-produce a false balance (spec section 10); take history from a trusted or
-cross-checked source.
+instruction without CPIs, and inner instructions replay in the reported order.
+A dishonest RPC can block recovery but cannot produce a false balance (spec
+section 10); take history from a trusted or cross-checked source.
 
 Pass `history.events()` to the balance reader or directly to
 `recoverEscrowBalance(state, publicAmount, keys, events)`. Recovery validates
