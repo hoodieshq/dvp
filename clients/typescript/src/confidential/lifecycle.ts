@@ -361,18 +361,21 @@ export async function refundSession(
   let legBRefund: LegBRefundArgs = { __kind: "None" };
   if (request) {
     const { source } = request;
-    const balance = readAvailableBalance(
-      source.state,
-      source.keys,
-      source.history,
-    );
     if (request.amount.kind === "none") {
+      // None needs only the all-zero ciphertext; reading the balance could
+      // fail on a false AE without history.
+      checkEscrowKeys(source.state, source.keys);
       if (source.state.availableBalance.some((byte) => byte !== 0))
         throw new ConfidentialError(
           "BalanceMismatch",
           "None refund requires an all-zero available ciphertext",
         );
     } else {
+      const balance = readAvailableBalance(
+        source.state,
+        source.keys,
+        source.history,
+      );
       const amount =
         request.amount.kind === "full" ? balance : request.amount.amount;
       if (request.amount.kind === "partial" && amount === 0n)

@@ -400,6 +400,21 @@ fn refund_rejects_none_with_nonzero_available_balance() {
 }
 
 #[test]
+fn none_refund_does_not_need_a_readable_balance() {
+    // The all-zero available ciphertext is all None checks. A false AE with
+    // pending credits and no history must not block it.
+    let keys = refund_keys();
+    let source = ConfidentialTransferAccount {
+        elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
+        decryptable_available_balance: keys.ae.encrypt(AMOUNT_B).into(),
+        pending_balance_lo: keys.elgamal.pubkey().encrypt(AMOUNT_B).into(),
+        pending_balance_credit_counter: 1.into(),
+        ..Default::default()
+    };
+    refund_from_state(&source, RefundAmount::None).unwrap();
+}
+
+#[test]
 fn refund_rejects_full_above_transfer_limit() {
     assert!(matches!(
         refund_from_snapshot(MAX_TRANSFER_AMOUNT + 1, RefundAmount::Full),
@@ -430,18 +445,30 @@ fn refund_from_snapshot(
     amount: RefundAmount,
 ) -> Result<TransactionSession, ConfidentialError> {
     // Consistent local ciphertexts reach refund validation without ledger setup or transfers.
-    let keys = EscrowKeys::from_seed(&[21; 32]).unwrap();
-    let config = SessionConfig::new(
-        Pubkey::new_unique(),
-        TransactionFormat::V1,
-        Default::default(),
-    );
+    let keys = refund_keys();
     let source = ConfidentialTransferAccount {
         elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
         available_balance: keys.elgamal.pubkey().encrypt(available).into(),
         decryptable_available_balance: keys.ae.encrypt(available).into(),
         ..Default::default()
     };
+    refund_from_state(&source, amount)
+}
+
+fn refund_keys() -> EscrowKeys {
+    EscrowKeys::from_seed(&[21; 32]).unwrap()
+}
+
+fn refund_from_state(
+    source: &ConfidentialTransferAccount,
+    amount: RefundAmount,
+) -> Result<TransactionSession, ConfidentialError> {
+    let keys = refund_keys();
+    let config = SessionConfig::new(
+        Pubkey::new_unique(),
+        TransactionFormat::V1,
+        Default::default(),
+    );
     let recipient = ConfidentialTransferAccount {
         elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
         approved: true.into(),
@@ -468,7 +495,7 @@ fn refund_from_snapshot(
         RefundInstruction::Reclaim(accounts),
         Some(RefundRequest {
             source: TransferSource {
-                state: &source,
+                state: source,
                 keys: &keys,
                 history: &[],
             },

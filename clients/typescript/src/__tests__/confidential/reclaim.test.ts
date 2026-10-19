@@ -86,3 +86,31 @@ test("reclaim public leg A without proofs", async () => {
     f.close();
   }
 });
+
+test("None refund does not need a readable balance", async () => {
+  const context = new TestContext(),
+    f = await fixture(context, 1);
+  try {
+    await createAndFund(context, f);
+    const funded = f.state(f.common.dvpAtaB);
+    // The all-zero available ciphertext is all None checks. A false AE with
+    // pending credits and no history must not block it.
+    const state = {
+      ...funded,
+      availableBalance: new Uint8Array(funded.availableBalance.length),
+      pendingBalanceLo: funded.availableBalance,
+      pendingBalanceCreditCounter: 1n,
+    };
+    await refundSession(
+      f.config,
+      { kind: "reclaim", input: f.reclaim },
+      {
+        source: { state, keys: f.keys },
+        recipient: f.state(f.common.userBAtaB),
+        amount: { kind: "none" },
+      },
+    );
+  } finally {
+    f.close();
+  }
+});

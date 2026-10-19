@@ -249,11 +249,15 @@ pub fn refund_session(
     let mut contexts = [None; 4];
     let refund = if let Some(request) = request {
         check_escrow_keys(request.source.state, request.source.keys)?;
-        let balance = read_available_balance(
-            request.source.state,
-            request.source.keys,
-            request.source.history,
-        )?;
+        // None needs only the all-zero ciphertext; reading the balance could
+        // fail on a false AE without history.
+        let balance = || {
+            read_available_balance(
+                request.source.state,
+                request.source.keys,
+                request.source.history,
+            )
+        };
         match request.amount {
             RefundAmount::None => {
                 if request.source.state.available_balance != Default::default() {
@@ -275,7 +279,7 @@ pub fn refund_session(
                     &mut session,
                     request.source.keys,
                     &available,
-                    balance,
+                    balance()?,
                     amount,
                     request.recipient,
                     request.auditor,
@@ -286,6 +290,7 @@ pub fn refund_session(
                 LegBRefund::Partial(transfer.data)
             }
             RefundAmount::Full => {
+                let balance = balance()?;
                 let available = request
                     .source
                     .state
