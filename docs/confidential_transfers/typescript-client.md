@@ -44,9 +44,9 @@ derivation. Keep `EscrowKeys` for Create, Settle and agreed-amount verification,
 which also use deterministic openings.
 
 The generated `decodeSwapDvp`, `fetchSwapDvp`, `fetchAllSwapDvp` and their
-`Maybe` variants check neither owner nor size. They accept a 586-byte
-confidential account and return only its base, ignoring the ciphertexts; do not
-use them before funding.
+`Maybe` variants accept only the 458-byte public layout and throw on a
+confidential account. They check neither owner nor PDA; do not use them before
+funding.
 
 Use `findSwapDvpPda`, `findNonceTombstonePda` and `findSwapDvpEscrowAta` to derive
 addresses. `decodeSwapDvpChecked` checks owner, exact public/confidential layout

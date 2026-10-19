@@ -1,7 +1,7 @@
 //! Checked, verify-before-fund helpers for the DvP swap client.
 //!
-//! The generated readers Borsh-decode any bytes at an address with no owner
-//! or size check. Escrows are funded by raw token transfers to an ATA derived
+//! The generated readers Borsh-decode any 458-byte account with no owner or
+//! PDA check. Escrows are funded by raw token transfers to an ATA derived
 //! from the `swap_dvp` pubkey, so an attacker-owned account that decodes as a
 //! `SwapDvp` lets a funder deposit into an ATA the attacker can drain.
 //!
@@ -417,6 +417,24 @@ mod tests {
             SwapDvp::try_from_bytes(&short),
             Err(SwapDvpVerifyError::WrongSize { .. })
         ));
+    }
+
+    #[test]
+    fn generated_from_bytes_requires_the_public_layout() {
+        // Patched by scripts/lib/patch-swap-dvp-exact-size.ts: the generated
+        // reader must not return the base of a 586-byte confidential account.
+        let bytes = on_chain_bytes(&sample());
+        assert_eq!(SwapDvp::from_bytes(&bytes).unwrap(), sample());
+        let mut confidential = bytes.clone();
+        confidential.resize(CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN, 7);
+        let mut short = Vec::new();
+        sample().serialize(&mut short).unwrap();
+        for data in [confidential, short] {
+            assert_eq!(
+                SwapDvp::from_bytes(&data).unwrap_err().kind(),
+                std::io::ErrorKind::InvalidData
+            );
+        }
     }
 
     #[test]

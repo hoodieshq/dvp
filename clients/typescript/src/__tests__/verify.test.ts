@@ -14,7 +14,10 @@ import {
   type MaybeEncodedAccount,
 } from "@solana/kit";
 import { DVP_SWAP_PROGRAM_PROGRAM_ADDRESS } from "../generated/programs/dvpSwapProgram";
-import { getSwapDvpEncoder } from "../generated/accounts/swapDvp";
+import {
+  decodeSwapDvp,
+  getSwapDvpEncoder,
+} from "../generated/accounts/swapDvp";
 import {
   CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE,
   decodeSwapDvpChecked,
@@ -77,6 +80,25 @@ function encodedAccount(overrides: {
     space: overrides.space ?? BigInt((overrides.data ?? validData()).length),
   } as MaybeEncodedAccount;
 }
+
+describe("generated decodeSwapDvp", () => {
+  // Patched by scripts/lib/patch-swap-dvp-exact-size.ts: the generated
+  // reader must not return the base of a 586-byte confidential account.
+  it("accepts only the 458-byte public layout", () => {
+    assert.equal(decodeSwapDvp(encodedAccount({})).exists, true);
+    assert.equal(
+      decodeSwapDvp(encodedAccount({ exists: false })).exists,
+      false,
+    );
+    const confidential = new Uint8Array(CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE);
+    confidential.set(validData());
+    for (const data of [confidential, validData().slice(0, 450)])
+      assert.throws(
+        () => decodeSwapDvp(encodedAccount({ data })),
+        /SwapDvp account must be 458 bytes/,
+      );
+  });
+});
 
 describe("decodeSwapDvpChecked", () => {
   it("accepts a program-owned, exact-size account", () => {

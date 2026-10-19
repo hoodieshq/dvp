@@ -31,9 +31,9 @@ See [key management](key-management.md) for the recommended master key setup,
 why the seed is not derived from a wallet signature, and how each party stores it.
 
 The generated `SwapDvp::from_bytes`, `TryFrom<&AccountInfo>`, `fetch_swap_dvp`,
-`fetch_all_swap_dvp` and their `maybe` variants check neither owner nor size.
-They accept a 586-byte confidential account and return only its base, ignoring
-the ciphertexts; do not use them before funding.
+`fetch_all_swap_dvp` and their `maybe` variants accept only the 458-byte public
+layout and reject a confidential account with `InvalidData`. They check neither
+owner nor PDA; do not use them before funding.
 
 Before funding, use `verify::verify_swap_dvp_bytes` (or the `fetch` feature's
 `decode_swap_dvp_account`) to check owner, exact layout, canonical swap PDA and

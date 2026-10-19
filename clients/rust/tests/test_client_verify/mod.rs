@@ -52,17 +52,17 @@ fn forged_swap_dvp_data(attacker: &Pubkey) -> Vec<u8> {
 
 /// The exploit setup: a plain System-owned account at a keypair the
 /// attacker controls, filled with SwapDvp-looking bytes. The checked
-/// decoder must reject it (wrong owner), even though the legacy
-/// `from_bytes` happily parses the data.
+/// decoder must reject it (wrong owner). The generated `from_bytes` now
+/// rejects this short Borsh layout too, but it never checks the owner.
 #[test]
 fn checked_decode_rejects_system_owned_forgery() {
     let mut context = TestContext::new();
     let attacker = Keypair::new();
     let data = forged_swap_dvp_data(&attacker.pubkey());
 
-    // Legacy generated reader: decodes the forgery without complaint.
-    // This is the unsafe behavior integrators must not rely on.
-    assert!(SwapDvp::from_bytes(&data).is_ok());
+    // The generated reader accepts only the 458-byte layout, so it rejects
+    // this 450-byte forgery by size alone.
+    assert!(SwapDvp::from_bytes(&data).is_err());
 
     context
         .svm

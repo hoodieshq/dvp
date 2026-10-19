@@ -78,7 +78,7 @@ fn create_configures_escrow_and_preserves_terms() {
                 .svm
                 .minimum_balance_for_rent_exemption(CONFIDENTIAL_SWAP_LEN)
         );
-        let base = SwapDvp::from_bytes(&swap.data).unwrap();
+        let base = SwapDvp::from_bytes(&swap.data[..SWAP_DVP_ACCOUNT_LEN]).unwrap();
         assert_eq!(base.amount_a, AMOUNT_A);
         assert_eq!(base.amount_b, u64::MAX);
         assert_eq!(base.user_a, f.user_a.pubkey());
