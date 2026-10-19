@@ -100,7 +100,12 @@ The requests also take the leg B mint as a `MintAccount`; the session checks its
 address and Token-2022 owner and reads the optional auditor key from it.
 `expected_auditor` pins the auditor from application configuration
 (`Some(None)` for none) and fails before any proof if the snapshot differs.
-`mint_auditor(mint, expected_mint)` exposes the same read. For confidential transfers,
+`mint_auditor(mint, expected_mint)` exposes the same read.
+Before any proof, `settle_session` compares the whole Settle account set with
+the checked swap: settlement authority, swap PDA, both mints and token programs,
+both canonical escrows, both destinations and both surplus accounts. Refund
+requests carry no swap; their proof contexts are bound to the instruction
+signer, which is the caller's own key. For confidential transfers,
 resolve leg B hook extras with `resolve_confidential_hook_accounts`, which uses
 `u64::MAX` and strips signer flags. The validation account is optional: when
 absent, the resolver returns just the readonly, non-signer hook program account.

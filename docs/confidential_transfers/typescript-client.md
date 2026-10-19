@@ -122,7 +122,11 @@ take the fetched mint B account as `mint`; the session checks its address and
 Token-2022 owner and reads the optional auditor key from it. `expectedAuditor`
 pins the auditor from application configuration (`null` for none) and fails
 before any proof if the snapshot differs. `mintAuditor(account, expectedMint)`
-exposes the same read. For ordinary
+exposes the same read. Before any proof, `settleSession` compares the whole
+Settle account set with the checked swap: settlement authority, swap PDA, both
+mints and token programs, both canonical escrows, both destinations and both
+surplus accounts. Refund requests carry no swap; their proof contexts are bound
+to the instruction signer, which is the caller's own key. For ordinary
 wallet-to-escrow funding, use Token-2022's confidential transfer helpers from
 `@solana-program/token-2022/confidential`; the DvP API covers escrow operations.
 The test suite's funding wrapper is private to `__tests__/confidential/utils.ts`.

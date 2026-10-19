@@ -33,7 +33,11 @@ import {
   type RecoverConfidentialDvpInput,
 } from "../generated/instructions";
 import type { LegBRefundArgs } from "../generated/types";
-import type { ConfidentialSwapDvp } from "../verify";
+import {
+  findSwapDvpEscrowAta,
+  findSwapDvpPda,
+  type ConfidentialSwapDvp,
+} from "../verify";
 import { EscrowKeys, type ConfidentialAccountKeys } from "./keys";
 import { AMOUNT_LO_BITS, MAX_TRANSFER_AMOUNT } from "./constants";
 import {
@@ -206,6 +210,7 @@ export async function settleSession(
       "HookedSettleRequiresV1",
       "Hooked Settle requires v1",
     );
+  await checkSettleAccounts(input, request.swap, config.programAddress);
   const { source } = request;
   checkEscrowKeys(source.state, source.keys);
   const expected = source.keys.encryptAmount(request.expectedAmountB);
@@ -553,4 +558,56 @@ function readAuditor(
   )
     throw new ConfidentialError("Account", "Mint auditor mismatch");
   return auditor;
+}
+
+/**
+ * The program rejects any other account set, but only after the payer has
+ * funded proof contexts bound to the settlement authority; refuse before that.
+ */
+async function checkSettleAccounts(
+  input: SettleSessionInput,
+  swap: ConfidentialSwapDvp,
+  programAddress?: Address,
+) {
+  const base = swap.base;
+  const [swapDvp] = await findSwapDvpPda({ ...base, programAddress });
+  const ata = async (owner: Address, mint: Address, tokenProgram: Address) =>
+    (await findSwapDvpEscrowAta({ swapDvp: owner, mint, tokenProgram }))[0];
+  const [programA, programB] = [base.tokenProgramA, base.tokenProgramB];
+  for (const [field, actual, expected] of [
+    [
+      "settlement authority",
+      input.settlementAuthority.address,
+      base.settlementAuthority,
+    ],
+    ["swap", input.swapDvp, swapDvp],
+    ["mint A", input.mintA, base.mintA],
+    ["mint B", input.mintB, base.mintB],
+    ["token program A", input.tokenProgramA, programA],
+    ["token program B", input.tokenProgramB, programB],
+    ["escrow A", input.dvpAtaA, await ata(swapDvp, base.mintA, programA)],
+    ["escrow B", input.dvpAtaB, await ata(swapDvp, base.mintB, programB)],
+    [
+      "user A destination",
+      input.userADestinationAtaB,
+      await ata(base.userASettlementDestination, base.mintB, programB),
+    ],
+    [
+      "user B destination",
+      input.userBDestinationAtaA,
+      await ata(base.userBSettlementDestination, base.mintA, programA),
+    ],
+    [
+      "user A surplus account",
+      input.userAAtaA,
+      await ata(base.userA, base.mintA, programA),
+    ],
+    [
+      "user B surplus account",
+      input.userBAtaB,
+      await ata(base.userB, base.mintB, programB),
+    ],
+  ] as const)
+    if (actual !== expected)
+      throw new ConfidentialError("Account", `Wrong Settle ${field}`);
 }

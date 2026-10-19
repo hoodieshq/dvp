@@ -182,6 +182,63 @@ fn verify_confidential_terms_compares_every_public_term() {
 }
 
 #[test]
+fn settle_checks_the_account_set_against_the_swap() {
+    use dvp_swap_program_client::instructions::SettleConfidentialDvp;
+    let mut context = TestContext::new();
+    let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B);
+    let source = f.source(&context);
+    let swap = f.swap(&context);
+    let recipient = context.get_account(&f.recipient).unwrap();
+    let refund = context.get_account(&f.refund).unwrap();
+    let mint_b = context.get_account(&f.dvp.accounts.mint_b).unwrap();
+    let other = solana_pubkey::Pubkey::new_unique();
+    type Change = fn(&mut SettleConfidentialDvp, solana_pubkey::Pubkey);
+    let changed: [(Change, &str); 12] = [
+        (|a, k| a.settlement_authority = k, "settlement authority"),
+        (|a, k| a.swap_dvp = k, "swap"),
+        (|a, k| a.mint_a = k, "mint A"),
+        (|a, k| a.mint_b = k, "mint B"),
+        (|a, k| a.token_program_a = k, "token program A"),
+        (|a, k| a.token_program_b = k, "token program B"),
+        (|a, k| a.dvp_ata_a = k, "escrow A"),
+        (|a, k| a.dvp_ata_b = k, "escrow B"),
+        (|a, k| a.user_a_destination_ata_b = k, "user A destination"),
+        (|a, k| a.user_b_destination_ata_a = k, "user B destination"),
+        (|a, k| a.user_a_ata_a = k, "user A surplus account"),
+        (|a, k| a.user_b_ata_b = k, "user B surplus account"),
+    ];
+    for (change, field) in changed {
+        let mut accounts = f.settle_accounts();
+        change(&mut accounts, other);
+        let result = settle_session(
+            &f.config,
+            accounts,
+            SettleRequest {
+                source: TransferSource {
+                    state: &source,
+                    keys: &f.keys,
+                    history: &[],
+                },
+                swap: &swap,
+                expected_amount_b: AMOUNT_B,
+                recipient: crate::utils::recipient_account(f.recipient, &recipient),
+                surplus_recipient: crate::utils::recipient_account(f.refund, &refund),
+                expected_recipient: None,
+                expected_surplus_recipient: None,
+                mint: crate::utils::mint_account(f.dvp.accounts.mint_b, &mint_b),
+                expected_auditor: None,
+            },
+            &[],
+            &[],
+        );
+        assert!(matches!(
+            result,
+            Err(ConfidentialError::Account(message)) if message == field
+        ));
+    }
+}
+
+#[test]
 fn settle_rejects_wrong_amount_or_keys() {
     let mut context = TestContext::new();
     let f = ClientFixture::new(&mut context, TransactionFormat::V1, AMOUNT_B);

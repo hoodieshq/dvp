@@ -123,6 +123,7 @@ pub fn settle_session(
     {
         return Err(ConfidentialError::HookedSettleRequiresV1);
     }
+    check_settle_accounts(&accounts, request.swap)?;
     let source = request.source;
     check_escrow_keys(source.state, source.keys)?;
     if source.keys.encrypt_amount(request.expected_amount_b)? != request.swap.amount_b {
@@ -447,6 +448,67 @@ pub fn refund_session(
         }
     };
     session.finish(vec![ix])
+}
+
+/// The program rejects any other account set, but only after the payer has
+/// funded proof contexts bound to `settlement_authority`; refuse before that.
+fn check_settle_accounts(
+    accounts: &SettleConfidentialDvp,
+    swap: &ConfidentialSwapDvp,
+) -> Result<(), ConfidentialError> {
+    use crate::verify::{find_swap_dvp_address, find_swap_dvp_escrow_ata as ata};
+    let base = &swap.base;
+    let (swap_dvp, _) = find_swap_dvp_address(
+        &base.settlement_authority,
+        &base.user_a,
+        &base.user_b,
+        &base.mint_a,
+        &base.mint_b,
+        base.nonce,
+    );
+    let (program_a, program_b) = (&base.token_program_a, &base.token_program_b);
+    for (field, matches) in [
+        (
+            "settlement authority",
+            accounts.settlement_authority == base.settlement_authority,
+        ),
+        ("swap", accounts.swap_dvp == swap_dvp),
+        ("mint A", accounts.mint_a == base.mint_a),
+        ("mint B", accounts.mint_b == base.mint_b),
+        ("token program A", accounts.token_program_a == *program_a),
+        ("token program B", accounts.token_program_b == *program_b),
+        (
+            "escrow A",
+            accounts.dvp_ata_a == ata(&swap_dvp, &base.mint_a, program_a),
+        ),
+        (
+            "escrow B",
+            accounts.dvp_ata_b == ata(&swap_dvp, &base.mint_b, program_b),
+        ),
+        (
+            "user A destination",
+            accounts.user_a_destination_ata_b
+                == ata(&base.user_a_settlement_destination, &base.mint_b, program_b),
+        ),
+        (
+            "user B destination",
+            accounts.user_b_destination_ata_a
+                == ata(&base.user_b_settlement_destination, &base.mint_a, program_a),
+        ),
+        (
+            "user A surplus account",
+            accounts.user_a_ata_a == ata(&base.user_a, &base.mint_a, program_a),
+        ),
+        (
+            "user B surplus account",
+            accounts.user_b_ata_b == ata(&base.user_b, &base.mint_b, program_b),
+        ),
+    ] {
+        if !matches {
+            return Err(ConfidentialError::Account(field));
+        }
+    }
+    Ok(())
 }
 
 fn read_auditor(

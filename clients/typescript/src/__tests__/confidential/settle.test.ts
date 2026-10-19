@@ -1,7 +1,7 @@
 import { runSwap } from "../../../examples/confidential/swap";
 import { prepareSettlement } from "../../../examples/confidential/settle";
 import { getTokenDecoder } from "@solana-program/token-2022";
-import { address } from "@solana/kit";
+import { address, generateKeyPairSigner } from "@solana/kit";
 import { ElGamalKeypair } from "@solana/zk-sdk";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -260,6 +260,48 @@ test("verifyConfidentialTerms compares every public term", async () => {
       }),
       { name: "ConfidentialError", code: "AmountMismatch" },
     );
+  } finally {
+    f.close();
+  }
+});
+
+test("Settle checks the account set against the swap", async () => {
+  const context = new TestContext(),
+    f = await fixture(context, 1);
+  try {
+    await createAndFund(context, f);
+    const signer = await generateKeyPairSigner(),
+      other = signer.address;
+    const request = {
+      source: f.source(),
+      swap: f.swap(),
+      expectedAmountB: f.amount,
+      recipient: context.account(address(f.recipient))!,
+      surplusRecipient: context.account(f.common.userBAtaB)!,
+      mint: context.account(f.common.mintB)!,
+    };
+    for (const [change, field] of [
+      [{ settlementAuthority: signer }, "settlement authority"],
+      [{ swapDvp: other }, "swap"],
+      [{ mintA: other }, "mint A"],
+      [{ mintB: other }, "mint B"],
+      [{ tokenProgramA: other }, "token program A"],
+      [{ tokenProgramB: other }, "token program B"],
+      [{ dvpAtaA: other }, "escrow A"],
+      [{ dvpAtaB: other }, "escrow B"],
+      [{ userADestinationAtaB: other }, "user A destination"],
+      [{ userBDestinationAtaA: other }, "user B destination"],
+      [{ userAAtaA: other }, "user A surplus account"],
+      [{ userBAtaB: other }, "user B surplus account"],
+    ] as const)
+      await assert.rejects(
+        settleSession(f.config, { ...f.settle, ...change }, request),
+        {
+          name: "ConfidentialError",
+          code: "Account",
+          message: `Wrong Settle ${field}`,
+        },
+      );
   } finally {
     f.close();
   }
