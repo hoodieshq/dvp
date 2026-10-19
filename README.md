@@ -102,7 +102,9 @@ PDA seeds: `[b"dvp", settlement_authority, user_a, user_b, mint_a, mint_b, nonce
 | 12 | ApplyConfidentialDvp | `user_a`, `user_b` or `settlement_authority` | Applies pending B credits before or after close. |
 
 Funding remains an ordinary wallet token transfer. Confidential funding requires
-verified swap terms, a configured recipient escrow, and the shared seed. Apply
+verified swap terms, a configured recipient escrow, and the shared seed.
+Confidential Create stores the amount B ciphertexts unchecked and cannot reject
+a zero amount B; only the funder's client verification catches it. Apply
 moves pending credits to available; terminal operations do not apply them.
 Remaining pending or public B balances keep escrow B open for later recovery.
 `Full` refunds exhaust available CT funds; public withdrawal through `None`
@@ -149,7 +151,7 @@ refund modes, mint restrictions and transfer-hook limitations.
 | 6    | `EarliestAfterExpiry`            | Create with `earliest > expiry`                                                                                                 |
 | 7    | `SelfDvp`                        | Create with `user_a == user_b`                                                                                                  |
 | 8    | `SameMint`                       | Create with `mint_a == mint_b`                                                                                                  |
-| 9    | `ZeroAmount`                     | Create with `amount_a == 0` or `amount_b == 0`                                                                                  |
+| 9    | `ZeroAmount`                     | Create with `amount_a == 0`, or public Create with `amount_b == 0`                                                              |
 | 10   | `BlockedMintExtension`           | Create or Settle with an unsupported mint extension; confidential B also rejects confidential transfer fees |
 | 11   | `SettlementAuthorityIsParty`     | Create with `settlement_authority` equal to `user_a` or `user_b`                                                                |
 | 12   | `SettlementAuthorityExecutable`  | Create with an executable `settlement_authority` (can't be credited closed-account rent)                                        |

@@ -147,6 +147,9 @@ checks only the swap owner, layout and PDA:
 4. `0 < expected_amount_b < 2^48`.
 5. The escrow's `decryptable_available_balance` decrypts under `escrow_ae`, and that value matches the available ElGamal ciphertext. An authenticated but false AE value fails verification; repair it through a verified Apply before funding.
 
+Check 4 is the only lower bound on amount B: confidential Create cannot reject
+a zero amount (7.3), so a funder who skips it can fund leg A for no payment.
+
 These checks do not compare the public terms with the agreed trade. Callers
 must separately compare parties, mints, settlement authority, amount A,
 destinations, nonce, expiry and earliest settlement time before funding or
@@ -350,7 +353,7 @@ Steps, after all CreateDvp checks (`ZeroAmount` applies to `amount_a` only):
 2. Create the escrow B ATA and run `verify_escrow_not_preloaded` before `Reallocate`, since it compares lamports with the rent of the current size.
 3. Escrow B's public `amount == 0`, else `EscrowPublicBalanceNotEmpty`. Its address is predictable, so it could hold someone else's public tokens before Create. Those are recovered through a public swap on the same seeds (`CreateDvp`, then Reclaim); the confidential swap uses another nonce.
 4. PDA signs: `Reallocate` (adds `ConfidentialTransferAccount`, payer funds) → `ConfigureAccount` (`decryptable_zero_balance`, `maximum_pending_balance_credit_counter = 65536`, PubkeyValidity read through the instructions sysvar) → `DisableNonConfidentialCredits`.
-5. Allocate 586 bytes; store the base with `amount_b = u64::MAX`, and the ciphertexts as the tail. They are stored unchecked: the bounds on `amount_b` are a client check (4.4).
+5. Allocate 586 bytes; store the base with `amount_b = u64::MAX`, and the ciphertexts as the tail. They are stored unchecked: the bounds on `amount_b` are a client check (4.4). Confidential Create therefore cannot reject an encryption of zero; only the funder's check 4 in 4.4 catches it.
 
 `ConfigureAccount` sets `approved` from the mint's `auto_approve_new_accounts`. On a manual-approval mint escrow B stays unapproved: it can be neither funded nor used as a transfer source until the mint's CT authority calls `ApproveAccount` on it. Clients check `approved` before funding.
 
