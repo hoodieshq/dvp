@@ -1,10 +1,10 @@
 use dvp_swap_program_client::{
     confidential::{
-        mint_auditor, settle_session, BalanceEvent, ConfidentialError, EscrowKeys, SessionConfig,
-        SettleRequest, TransactionSession, TransferSource,
+        settle_session, BalanceEvent, ConfidentialError, EscrowKeys, MintAccount, RecipientAccount,
+        SessionConfig, SettleRequest, TransactionSession, TransferSource,
     },
     instructions::SettleConfidentialDvp,
-    verify::verify_confidential_funding,
+    verify::{verify_confidential_terms, ExpectedConfidentialTerms},
 };
 use solana_account::Account;
 use solana_instruction::AccountMeta;
@@ -28,22 +28,24 @@ pub fn settle(
     accounts: SettleConfidentialDvp,
     snapshot: Snapshot<'_>,
     keys: &EscrowKeys,
-    expected_amount_b: u64,
+    terms: &ExpectedConfidentialTerms,
     history: &[BalanceEvent],
     leg_a_extras: &[AccountMeta],
     leg_b_extras: &[AccountMeta],
 ) -> Result<TransactionSession, ConfidentialError> {
-    let (swap, escrow) = verify_confidential_funding(
-        &accounts.swap_dvp,
-        snapshot.swap,
-        &accounts.dvp_ata_b,
-        snapshot.escrow,
-        keys,
-        expected_amount_b,
-    )?;
-    let recipient = super::recipient(snapshot.recipient, &swap.base.mint_b)?;
-    let surplus_recipient = super::recipient(snapshot.surplus_recipient, &swap.base.mint_b)?;
-    let auditor = mint_auditor(&snapshot.mint.owner, &snapshot.mint.data)?;
+    // The settlement authority re-validates every agreed term before Settle.
+    let checked = verify_confidential_terms(snapshot.swap, snapshot.escrow, keys, terms)?;
+    let (swap, escrow) = (checked.swap, checked.state);
+    let recipient = RecipientAccount {
+        address: accounts.user_a_destination_ata_b,
+        owner: snapshot.recipient.owner,
+        data: &snapshot.recipient.data,
+    };
+    let surplus_recipient = RecipientAccount {
+        address: accounts.user_b_ata_b,
+        owner: snapshot.surplus_recipient.owner,
+        data: &snapshot.surplus_recipient.data,
+    };
     settle_session(
         config,
         accounts,
@@ -54,10 +56,21 @@ pub fn settle(
                 history,
             },
             swap: &swap,
-            expected_amount_b,
-            recipient: &recipient,
-            surplus_recipient: &surplus_recipient,
-            auditor: auditor.as_ref(),
+            expected_amount_b: terms.amount_b,
+            recipient,
+            surplus_recipient,
+            // Pass recipient keys from the trade agreement to stop trusting
+            // the RPC for them.
+            expected_recipient: None,
+            expected_surplus_recipient: None,
+            mint: MintAccount {
+                address: swap.base.mint_b,
+                owner: snapshot.mint.owner,
+                data: &snapshot.mint.data,
+            },
+            // Pin the auditor from application configuration (`Some(None)`
+            // for none) to stop trusting the RPC for it.
+            expected_auditor: None,
         },
         leg_a_extras,
         leg_b_extras,

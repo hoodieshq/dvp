@@ -14,7 +14,10 @@ import {
   type MaybeEncodedAccount,
 } from "@solana/kit";
 import { DVP_SWAP_PROGRAM_PROGRAM_ADDRESS } from "../generated/programs/dvpSwapProgram";
-import { getSwapDvpEncoder } from "../generated/accounts/swapDvp";
+import {
+  decodeSwapDvp,
+  getSwapDvpEncoder,
+} from "../generated/accounts/swapDvp";
 import {
   CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE,
   decodeSwapDvpChecked,
@@ -26,12 +29,17 @@ import {
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111" as Address;
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address;
+const TOKEN_2022_PROGRAM =
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" as Address;
 
 /** Dummy pubkey made of a single byte repeated 32 times. */
 const addressOf = (fill: number) =>
   getAddressDecoder().decode(new Uint8Array(32).fill(fill));
 
-const validData = () =>
+const validData = (
+  tokenProgramA: Address = TOKEN_PROGRAM,
+  tokenProgramB: Address = TOKEN_2022_PROGRAM,
+) =>
   new Uint8Array(
     getSwapDvpEncoder().encode({
       bump: 254,
@@ -40,8 +48,8 @@ const validData = () =>
       mintA: addressOf(3),
       mintB: addressOf(4),
       settlementAuthority: addressOf(5),
-      tokenProgramA: addressOf(6),
-      tokenProgramB: addressOf(7),
+      tokenProgramA,
+      tokenProgramB,
       amountA: 1_000n,
       amountB: 2_500n,
       expiryTimestamp: 1_780_000_000n,
@@ -58,6 +66,7 @@ const validData = () =>
 function encodedAccount(overrides: {
   programAddress?: Address;
   data?: Uint8Array;
+  space?: bigint;
   exists?: boolean;
 }): MaybeEncodedAccount {
   return {
@@ -68,9 +77,28 @@ function encodedAccount(overrides: {
     data: overrides.data ?? validData(),
     executable: false,
     lamports: 1_000_000n,
-    space: BigInt((overrides.data ?? validData()).length),
+    space: overrides.space ?? BigInt((overrides.data ?? validData()).length),
   } as MaybeEncodedAccount;
 }
+
+describe("generated decodeSwapDvp", () => {
+  // Patched by scripts/lib/patch-swap-dvp-exact-size.ts: the generated
+  // reader must not return the base of a 586-byte confidential account.
+  it("accepts only the 458-byte public layout", () => {
+    assert.equal(decodeSwapDvp(encodedAccount({})).exists, true);
+    assert.equal(
+      decodeSwapDvp(encodedAccount({ exists: false })).exists,
+      false,
+    );
+    const confidential = new Uint8Array(CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE);
+    confidential.set(validData());
+    for (const data of [confidential, validData().slice(0, 450)])
+      assert.throws(
+        () => decodeSwapDvp(encodedAccount({ data })),
+        /SwapDvp account must be 458 bytes/,
+      );
+  });
+});
 
 describe("decodeSwapDvpChecked", () => {
   it("accepts a program-owned, exact-size account", () => {
@@ -99,6 +127,31 @@ describe("decodeSwapDvpChecked", () => {
         ),
       /458|size|length/i,
     );
+  });
+
+  it("rejects a sliced confidential account instead of decoding it as public", () => {
+    assert.throws(
+      () =>
+        decodeSwapDvpChecked(
+          encodedAccount({
+            data: validData(),
+            space: BigInt(CONFIDENTIAL_SWAP_DVP_ACCOUNT_SIZE),
+          }),
+        ),
+      /partial snapshot/,
+    );
+  });
+
+  it("rejects a token program other than SPL Token or Token-2022", () => {
+    for (const data of [
+      validData(addressOf(6)),
+      validData(TOKEN_PROGRAM, addressOf(7)),
+    ]) {
+      assert.throws(
+        () => decodeSwapDvpChecked(encodedAccount({ data })),
+        /Unsupported token program/,
+      );
+    }
   });
 
   it("rejects a missing account", () => {

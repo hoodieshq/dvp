@@ -35,7 +35,7 @@ build:
 
 # CI receives generated clients from the generation job before this step.
 build-sbf:
-	cd program && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
+	cd program && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION) -- --locked
 
 # Pre-deploy guard: cargo-build-sbf writes a random target/deploy/*-keypair.json
 # that does NOT match declare_id!, so deploying with it (or without an explicit
@@ -57,17 +57,17 @@ verify-program-id:
 # end-to-end. The .so lands in the workspace target/deploy/ alongside
 # the swap program's .so.
 build-hook-fixture:
-	cd tests/transfer-hook-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
+	cd tests/transfer-hook-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION) -- --locked
 
 # Build the smart-wallet fixture used by integration tests to model a
 # Squads-style vault party (signs via CPI). The .so lands in the
 # workspace target/deploy/ alongside the swap program's .so.
 build-smart-wallet-fixture:
-	cd tests/smart-wallet-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
+	cd tests/smart-wallet-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION) -- --locked
 
 # Test-only PDA driver for the shared confidential transfer helpers.
 build-confidential-fixture:
-	cd tests/confidential-transfer-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION)
+	cd tests/confidential-transfer-fixture && cargo-build-sbf --tools-version $(PLATFORM_TOOLS_VERSION) -- --locked
 
 # Generate the Codama IDL from the program's annotations.
 generate-idl:

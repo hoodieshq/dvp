@@ -118,8 +118,9 @@ for (const validationState of ["present", "absent", "prefunded"] as const) {
         source: f.source(),
         swap: f.swap(),
         expectedAmountB: f.amount,
-        recipient: f.state(address(f.recipient)),
-        surplusRecipient: f.state(f.common.userBAtaB),
+        recipient: context.account(address(f.recipient))!,
+        mint: context.account(f.common.mintB)!,
+        surplusRecipient: context.account(f.common.userBAtaB)!,
       };
       await assert.rejects(
         settleSession({ ...f.config, format: 0 }, f.settle, request, {

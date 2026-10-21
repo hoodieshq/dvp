@@ -26,7 +26,8 @@ test("Partial Reclaim followed by Full Reclaim (v0)", async () => {
         { kind: "reclaim", input: f.reclaim },
         {
           source: f.source(),
-          recipient: f.state(f.common.userBAtaB),
+          recipient: context.account(f.common.userBAtaB)!,
+          mint: context.account(f.common.mintB)!,
           amount: { kind: "partial", amount: partial },
         },
       ),
@@ -81,6 +82,35 @@ test("reclaim public leg A without proofs", async () => {
     assert.equal(
       getTokenDecoder().decode(context.account(f.assetRefund)!.data).amount,
       f.create.amountA,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("None refund does not need a readable balance", async () => {
+  const context = new TestContext(),
+    f = await fixture(context, 1);
+  try {
+    await createAndFund(context, f);
+    const funded = f.state(f.common.dvpAtaB);
+    // The all-zero available ciphertext is all None checks. A false AE with
+    // pending credits and no history must not block it.
+    const state = {
+      ...funded,
+      availableBalance: new Uint8Array(funded.availableBalance.length),
+      pendingBalanceLo: funded.availableBalance,
+      pendingBalanceCreditCounter: 1n,
+    };
+    await refundSession(
+      f.config,
+      { kind: "reclaim", input: f.reclaim },
+      {
+        source: { state, keys: f.keys },
+        recipient: context.account(f.common.userBAtaB)!,
+        mint: context.account(f.common.mintB)!,
+        amount: { kind: "none" },
+      },
     );
   } finally {
     f.close();

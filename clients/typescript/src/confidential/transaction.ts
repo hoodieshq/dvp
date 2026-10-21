@@ -53,6 +53,10 @@ export const ProofKind = {
     ZkElGamalProofInstruction.VerifyBatchedGroupedCiphertext3HandlesValidity,
 } as const;
 
+// Default (mainnet) rent: lamports per byte, including the account overhead.
+const ACCOUNT_STORAGE_OVERHEAD = 128n;
+const DEFAULT_LAMPORTS_PER_BYTE = 6_960n;
+
 export type SessionConfig = Readonly<{
   payer: TransactionSigner;
   format: 0 | 1;
@@ -168,12 +172,29 @@ export class SessionBuilder {
     private authority: TransactionSigner,
   ) {}
 
+  /**
+   * Rent comes from the caller's RPC. Proof contexts close to the authority,
+   * so cap it at the default to keep the payer from overpaying.
+   */
   private rentExempt(space: number): Promise<bigint> {
     let lamports = this.rent.get(space);
     if (!lamports) {
       lamports = Promise.resolve(
         this.config.minimumBalanceForRentExemption(space),
-      );
+      ).then((value) => {
+        if (
+          typeof value !== "bigint" ||
+          value < 0n ||
+          value >
+            (ACCOUNT_STORAGE_OVERHEAD + BigInt(space)) *
+              DEFAULT_LAMPORTS_PER_BYTE
+        )
+          throw new ConfidentialError(
+            "Transaction",
+            `Rent for ${space} bytes must be between 0 and the default rent-exemption minimum`,
+          );
+        return value;
+      });
       this.rent.set(space, lamports);
     }
     return lamports;

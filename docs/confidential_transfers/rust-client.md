@@ -20,6 +20,9 @@ not part of the normal client API.
 `derive_shared_seed(swap, mac)` passes the protocol tag and swap address to the
 caller's HMAC-SHA256 callback. `EscrowKeys::from_seed` derives ElGamal, AE and
 the two deterministic openings; `encrypt_amount` accepts `1..=2^48-1`.
+`EscrowKeys` itself is neither `Debug` nor serializable, but its fields are
+public and the SDK `ElGamalKeypair` derives `Serialize`. Never serialize, log
+or include escrow keys or their fields in error reports.
 The shared fixtures are in `clients/test-vectors/confidential-amount-b.json`.
 Regenerate them explicitly with
 `cargo test -p dvp-swap-program-client --features confidential --lib regenerate_shared_vectors -- --ignored`.
@@ -27,13 +30,22 @@ Normal tests only read these fixtures.
 See [key management](key-management.md) for the recommended master key setup,
 why the seed is not derived from a wallet signature, and how each party stores it.
 
+The generated `SwapDvp::from_bytes`, `TryFrom<&AccountInfo>`, `fetch_swap_dvp`,
+`fetch_all_swap_dvp` and their `maybe` variants accept only the 458-byte public
+layout and reject a confidential account with `InvalidData`. They check neither
+owner nor PDA; do not use them before funding.
+
 Before funding, use `verify::verify_swap_dvp_bytes` (or the `fetch` feature's
 `decode_swap_dvp_account`) to check owner, exact layout, canonical swap PDA and
 the confidential amount sentinel.
+Pass the full account data: a `data_slice` prefix of a confidential account
+has the public layout and decodes as `Public`.
 The result is `SwapDvpAccount::Public` or `SwapDvpAccount::Confidential`; the
 confidential base's `amount_b` is a sentinel. These decoders now return
 `SwapDvpAccount` instead of `SwapDvp`; existing public-only callers should match
-`Public` or use `base()` when they need only common fields. Use `read_escrow_account` to check
+`Public` or use `public()`, which returns `None` for a confidential swap.
+`base()` returns common fields for both modes and must not drive funding
+decisions for confidential swaps. Use `read_escrow_account` to check
 the Token-2022 owner, canonical ATA, token authority and mint. Then call
 `verify_confidential_swap` with the agreed amount and derived keys. It checks the
 escrow key first (`EscrowKeyMismatch`), then the amount ciphertexts
@@ -43,13 +55,19 @@ invalid accounts and still propagates RPC errors.
 With `fetch`, `verify::verify_confidential_funding` combines these checks over the
 two fetched accounts and returns the checked terms and CT state. It does not
 compare public terms with an off-chain agreement. Before funding or settling,
-compare parties, mints, settlement authority, amount A, destinations, nonce,
-expiry and earliest settlement time with the agreed trade.
+use `verify::verify_confidential_terms` with `ExpectedConfidentialTerms` for the
+agreed trade instead: it runs the same checks at the swap PDA and escrow B
+derived from those terms, then compares token program A, amount A, expiry,
+earliest settlement time and both resolved destinations. It returns both
+canonical escrow addresses, `escrow_a` (from `token_program_a`) and `escrow_b`;
+fund those rather than addresses taken from counterparty metadata. The funding
+and settle examples use it.
 
 ## Transaction sessions
 
 Construct `SessionConfig` with the fee payer, format, current cluster rent and
-active lookup tables for v0. The default limits are 400k CU and 4 MB of loaded
+active lookup tables for v0. Take rent from a trusted source: sessions reject a
+`Rent` that charges more than the default (mainnet) rent-exemption minimum. The default limits are 400k CU and 4 MB of loaded
 account data. Set `compute_unit_price: Some(price)` in micro-lamports per CU to
 include priority fees in every size check and proof-packing decision. V0 uses
 `SetComputeUnitPrice`; v1 stores `ceil(price * compute_unit_limit / 1_000_000)`
@@ -64,14 +82,30 @@ incoming credits when payment and surplus use the same destination account.
 | --- | --- |
 | `create_session` | Generated Create accounts/terms, keys and agreed amount; inserts ciphertexts, decryptable zero and the inline pubkey proof. |
 | `apply_session` | Generated Apply accounts/seed terms and `TransferSource`; computes the actual pending counter and correct new AE balance. |
-| `settle_session` | Checked confidential swap, agreed amount, escrow and both recipients; prepares payment, amount-binding, optional surplus and zero proofs. |
+| `settle_session` | Checked confidential swap, agreed amount, escrow and both recipient snapshots; prepares payment, amount-binding, optional surplus and zero proofs. |
 | `refund_session` | `RefundInstruction` wrapping generated Reclaim/Cancel/Reject/Recover accounts and optional `RefundRequest`; prepares `Partial`/`Full` proofs or `None` without proofs. |
 
 Funding is an ordinary SPL Token-2022 wallet transfer to the verified escrow.
 Use the SPL SDK for it; the DvP client does not expose a generic transfer builder.
 
 `TransferSource` contains the CT snapshot, its keys and recovered history events.
-Read the mint's optional auditor with `mint_auditor`. For confidential transfers,
+Settle and refund requests take each recipient as a `RecipientAccount` (address,
+owner and data as fetched). The session checks that it is the instruction's
+destination, owned by Token-2022 and of the leg B mint before reading its
+ElGamal key. `expected_recipient` (and `expected_surplus_recipient` for Settle)
+optionally pin the keys from the trade agreement; on a mismatch the session
+fails before building any proof. Without them the RPC is trusted for recipient
+keys, as in any Token-2022 wallet (spec section 10).
+The requests also take the leg B mint as a `MintAccount`; the session checks its
+address and Token-2022 owner and reads the optional auditor key from it.
+`expected_auditor` pins the auditor from application configuration
+(`Some(None)` for none) and fails before any proof if the snapshot differs.
+`mint_auditor(mint, expected_mint)` exposes the same read.
+Before any proof, `settle_session` compares the whole Settle account set with
+the checked swap: settlement authority, swap PDA, both mints and token programs,
+both canonical escrows, both destinations and both surplus accounts. Refund
+requests carry no swap; their proof contexts are bound to the instruction
+signer, which is the caller's own key. For confidential transfers,
 resolve leg B hook extras with `resolve_confidential_hook_accounts`, which uses
 `u64::MAX` and strips signer flags. The validation account is optional: when
 absent, the resolver returns just the readonly, non-signer hook program account.
@@ -130,12 +164,18 @@ chronologically, then pass `events()` to the balance reader.
 Transactions sharing a slot must follow their actual block order. Include only
 history through the snapshot being checked. After a decoding error, discard the
 `BalanceHistory` instance; `push` may already have applied part of that transaction.
+`from_rpc` does not verify signatures, and the RPC fields replay depends on are
+unsigned. A missing inner-instruction group reads as an instruction without
+CPIs, and inner instructions replay in the reported order. A dishonest RPC can
+block recovery but cannot produce a false balance (spec section 10); take
+history from a trusted or cross-checked source.
 
 Replay incoming transfers and ConfidentialMint into pending low/high balances,
 outgoing transfers and ConfidentialBurn out of available, and Apply into available.
 Deposit adds public tokens to pending; Withdraw subtracts from available. Configure
 resets the replayed event list, and Empty requires the reconstructed CT balance
-to be zero. Confidential TransferWithFee is unsupported and returns an error.
+to be zero. Confidential TransferWithFee is replayed as Transfer. DvP mints have
+no TransferFeeConfig, and Token-2022 then ignores the fee proofs.
 SPL Record bytes survive CloseAccount until the end of that transaction, matching
 runtime behavior; a later initialization at the same address starts fresh.
 Transfer amounts come from the escrow's source/destination handles in the
@@ -170,7 +210,9 @@ incomplete history, arithmetic overflow and mismatches return errors. An AE
 value is a fast path only after the same ElGamal check; AE authentication alone
 is not evidence that the number is correct. Outgoing builders use
 `read_available_balance` and do not decode unrelated pending credits when AE is
-correct. Apply uses the full balance reader. Funding verification deliberately
+correct. Apply uses the full balance reader; with non-empty history it rebuilds
+the balance from history and requires the snapshot to match, because the program
+does not check the AE that Apply writes. Funding verification deliberately
 rejects false AE; repair it with a verified Apply before funding.
 
 If both the initial balance read and history recovery fail,
@@ -191,8 +233,8 @@ construction, so these checks do not replace final on-chain validation.
 
 - `create_apply.rs`: derive the shared seed through a KMS callback, Create, verify
   fetched accounts before SPL wallet funding, then Apply from a fresh snapshot.
-- `settle.rs`: verify fetched swap/escrow/recipient snapshots, read the mint auditor,
-  and build an exact or surplus Settle. Integration tests execute this recipe in
+- `settle.rs`: verify fetched swap/escrow snapshots, pass the recipient and mint
+  snapshots, and build an exact or surplus Settle. Integration tests execute this recipe in
   both formats, including a mint auditor and nonzero high limbs.
 - `refunds.rs`: prepare Reclaim, Cancel, Reject or Recover from current snapshots.
 - `send.rs`: sign with a fresh blockhash, confirm preparations in order, send the

@@ -1,9 +1,15 @@
 import {
   downgradeRoleToNonSigner,
+  getAddressEncoder,
   type AccountMeta,
   type Address,
+  type EncodedAccount,
   type Instruction,
 } from "@solana/kit";
+import {
+  getTokenDecoder,
+  TOKEN_2022_PROGRAM_ADDRESS,
+} from "@solana-program/token-2022";
 import { getVerifyProofInstruction } from "@solana-program/zk-elgamal-proof";
 import {
   CiphertextCiphertextEqualityProofData,
@@ -27,13 +33,20 @@ import {
   type RecoverConfidentialDvpInput,
 } from "../generated/instructions";
 import type { LegBRefundArgs } from "../generated/types";
-import type { ConfidentialSwapDvp } from "../verify";
+import {
+  findSwapDvpEscrowAta,
+  findSwapDvpPda,
+  type ConfidentialSwapDvp,
+} from "../verify";
 import { EscrowKeys, type ConfidentialAccountKeys } from "./keys";
 import { AMOUNT_LO_BITS, MAX_TRANSFER_AMOUNT } from "./constants";
 import {
   readAvailableBalance,
   readEscrowBalance,
+  recoverEscrowBalance,
   checkEscrowKeys,
+  confidentialState,
+  mintAuditor,
   type BalanceEvent,
   type ConfidentialTransferAccount,
 } from "./balance";
@@ -119,12 +132,11 @@ export function applySession(
   input: ApplySessionInput,
   source: TransferSource,
 ) {
-  const balance = readEscrowBalance(
-    source.state,
-    0n,
-    source.keys,
-    source.history,
-  );
+  // The program does not check the AE that Apply writes. When history is
+  // supplied, the snapshot must match it rather than only itself.
+  const balance = source.history?.length
+    ? recoverEscrowBalance(source.state, 0n, source.keys, source.history)
+    : readEscrowBalance(source.state, 0n, source.keys);
   const appliedBalance = balance.available + balance.pending;
   assertU64(appliedBalance);
   const ae = source.keys.ae.encrypt(appliedBalance);
@@ -165,9 +177,22 @@ export type SettleRequest = Readonly<{
   source: TransferSource<EscrowKeys>;
   swap: ConfidentialSwapDvp;
   expectedAmountB: bigint;
-  recipient: ConfidentialTransferAccount;
-  surplusRecipient: ConfidentialTransferAccount;
-  auditor?: Uint8Array;
+  /** Fetched recipient token accounts, bound to the Settle destinations. */
+  recipient: EncodedAccount;
+  surplusRecipient: EncodedAccount;
+  /**
+   * Recipient ElGamal keys from the trade agreement. When omitted, the key
+   * read from the recipient snapshot is trusted.
+   */
+  expectedRecipient?: Uint8Array;
+  expectedSurplusRecipient?: Uint8Array;
+  /** Fetched mint B account, the source of the optional auditor key. */
+  mint: EncodedAccount;
+  /**
+   * Auditor from application configuration; `null` requires a mint without
+   * auditor. When omitted, the mint snapshot is trusted.
+   */
+  expectedAuditor?: Uint8Array | null;
 }>;
 
 export async function settleSession(
@@ -185,6 +210,7 @@ export async function settleSession(
       "HookedSettleRequiresV1",
       "Hooked Settle requires v1",
     );
+  await checkSettleAccounts(input, request.swap, config.programAddress);
   const { source } = request;
   checkEscrowKeys(source.state, source.keys);
   const expected = source.keys.encryptAmount(request.expectedAmountB);
@@ -215,8 +241,25 @@ export async function settleSession(
   // Payment and surplus each add one credit when they share the same recipient.
   const paymentCredits =
     surplus > 0n && input.userADestinationAtaB === input.userBAtaB ? 2n : 1n;
-  checkRecipient(request.recipient, paymentCredits);
-  if (surplus > 0n) checkRecipient(request.surplusRecipient, paymentCredits);
+  const mint = request.swap.base.mintB;
+  const recipient = readRecipient(
+    request.recipient,
+    input.userADestinationAtaB,
+    mint,
+    request.expectedRecipient,
+  );
+  checkRecipient(recipient, paymentCredits);
+  const surplusRecipient =
+    surplus > 0n
+      ? readRecipient(
+          request.surplusRecipient,
+          input.userBAtaB,
+          mint,
+          request.expectedSurplusRecipient,
+        )
+      : undefined;
+  if (surplusRecipient) checkRecipient(surplusRecipient, paymentCredits);
+  const auditor = readAuditor(request.mint, mint, request.expectedAuditor);
   const session = new SessionBuilder(config, input.settlementAuthority);
   const payment = await prepareTransfer(
     session,
@@ -224,8 +267,8 @@ export async function settleSession(
     new Uint8Array(source.state.availableBalance),
     balance,
     request.expectedAmountB,
-    request.recipient,
-    request.auditor,
+    recipient,
+    auditor,
   );
   const [paymentEqualityContext, paymentValidityContext, paymentRangeContext] =
     payment.contexts;
@@ -259,18 +302,17 @@ export async function settleSession(
       pubkey.free();
     }
   }
-  const refund =
-    surplus > 0n
-      ? await prepareTransfer(
-          session,
-          source.keys,
-          payment.remaining,
-          surplus,
-          surplus,
-          request.surplusRecipient,
-          request.auditor,
-        )
-      : undefined;
+  const refund = surplusRecipient
+    ? await prepareTransfer(
+        session,
+        source.keys,
+        payment.remaining,
+        surplus,
+        surplus,
+        surplusRecipient,
+        auditor,
+      )
+    : undefined;
   const remaining = parseCiphertext(refund?.remaining ?? payment.remaining);
   const zero = new ZeroCiphertextProofData(source.keys.elgamal, remaining);
   let zeroContext: Address;
@@ -335,9 +377,15 @@ export type RefundAmount =
   | { kind: "partial"; amount: bigint };
 export type RefundRequest = Readonly<{
   source: TransferSource;
-  recipient: ConfidentialTransferAccount;
+  /** Fetched refund destination token account. */
+  recipient: EncodedAccount;
+  /** When omitted, the key read from the recipient snapshot is trusted. */
+  expectedRecipient?: Uint8Array;
   amount: RefundAmount;
-  auditor?: Uint8Array;
+  /** Fetched mint B account, the source of the optional auditor key. */
+  mint: EncodedAccount;
+  /** `null` requires a mint without auditor; when omitted, the snapshot is trusted. */
+  expectedAuditor?: Uint8Array | null;
 }>;
 
 export async function refundSession(
@@ -361,18 +409,21 @@ export async function refundSession(
   let legBRefund: LegBRefundArgs = { __kind: "None" };
   if (request) {
     const { source } = request;
-    const balance = readAvailableBalance(
-      source.state,
-      source.keys,
-      source.history,
-    );
     if (request.amount.kind === "none") {
+      // None needs only the all-zero ciphertext; reading the balance could
+      // fail on a false AE without history.
+      checkEscrowKeys(source.state, source.keys);
       if (source.state.availableBalance.some((byte) => byte !== 0))
         throw new ConfidentialError(
           "BalanceMismatch",
           "None refund requires an all-zero available ciphertext",
         );
     } else {
+      const balance = readAvailableBalance(
+        source.state,
+        source.keys,
+        source.history,
+      );
       const amount =
         request.amount.kind === "full" ? balance : request.amount.amount;
       if (request.amount.kind === "partial" && amount === 0n)
@@ -380,14 +431,23 @@ export async function refundSession(
           "ZeroPartialRefund",
           "Partial refund must be nonzero",
         );
+      const [destination, mint] =
+        instruction.kind === "cancel" || instruction.kind === "reject"
+          ? [instruction.input.userBAtaB, instruction.input.mintB]
+          : [instruction.input.signerDestAta, instruction.input.mint];
       const transfer = await prepareTransfer(
         session,
         source.keys,
         new Uint8Array(source.state.availableBalance),
         balance,
         amount,
-        request.recipient,
-        request.auditor,
+        readRecipient(
+          request.recipient,
+          destination,
+          mint,
+          request.expectedRecipient,
+        ),
+        readAuditor(request.mint, mint, request.expectedAuditor),
       );
       [equalityContext, validityContext, rangeContext] = transfer.contexts;
       legBRefund = {
@@ -454,4 +514,100 @@ export async function refundSession(
       break;
   }
   return session.finish([appendExtras(ix, extras)]);
+}
+
+function readRecipient(
+  account: EncodedAccount,
+  destination: Address,
+  mint: Address,
+  expected?: Uint8Array,
+): ConfidentialTransferAccount {
+  if (
+    account.address !== destination ||
+    account.programAddress !== TOKEN_2022_PROGRAM_ADDRESS
+  )
+    throw new ConfidentialError("Account", "Wrong recipient address or owner");
+  const token = getTokenDecoder().decode(account.data);
+  if (token.mint !== mint)
+    throw new ConfidentialError("Account", "Wrong recipient mint");
+  const state = confidentialState(token);
+  // An unauthenticated key would receive the amount; refuse before any proof.
+  if (
+    expected &&
+    !bytesEqual(
+      new Uint8Array(getAddressEncoder().encode(state.elgamalPubkey)),
+      expected,
+    )
+  )
+    throw new ConfidentialError("Account", "Recipient ElGamal key mismatch");
+  return state;
+}
+
+function readAuditor(
+  account: EncodedAccount,
+  mint: Address,
+  expected?: Uint8Array | null,
+): Uint8Array | undefined {
+  const auditor = mintAuditor(account, mint);
+  // An RPC must neither substitute nor add an auditor; refuse before any proof.
+  if (
+    expected !== undefined &&
+    (expected === null
+      ? auditor !== undefined
+      : auditor === undefined || !bytesEqual(auditor, expected))
+  )
+    throw new ConfidentialError("Account", "Mint auditor mismatch");
+  return auditor;
+}
+
+/**
+ * The program rejects any other account set, but only after the payer has
+ * funded proof contexts bound to the settlement authority; refuse before that.
+ */
+async function checkSettleAccounts(
+  input: SettleSessionInput,
+  swap: ConfidentialSwapDvp,
+  programAddress?: Address,
+) {
+  const base = swap.base;
+  const [swapDvp] = await findSwapDvpPda({ ...base, programAddress });
+  const ata = async (owner: Address, mint: Address, tokenProgram: Address) =>
+    (await findSwapDvpEscrowAta({ swapDvp: owner, mint, tokenProgram }))[0];
+  const [programA, programB] = [base.tokenProgramA, base.tokenProgramB];
+  for (const [field, actual, expected] of [
+    [
+      "settlement authority",
+      input.settlementAuthority.address,
+      base.settlementAuthority,
+    ],
+    ["swap", input.swapDvp, swapDvp],
+    ["mint A", input.mintA, base.mintA],
+    ["mint B", input.mintB, base.mintB],
+    ["token program A", input.tokenProgramA, programA],
+    ["token program B", input.tokenProgramB, programB],
+    ["escrow A", input.dvpAtaA, await ata(swapDvp, base.mintA, programA)],
+    ["escrow B", input.dvpAtaB, await ata(swapDvp, base.mintB, programB)],
+    [
+      "user A destination",
+      input.userADestinationAtaB,
+      await ata(base.userASettlementDestination, base.mintB, programB),
+    ],
+    [
+      "user B destination",
+      input.userBDestinationAtaA,
+      await ata(base.userBSettlementDestination, base.mintA, programA),
+    ],
+    [
+      "user A surplus account",
+      input.userAAtaA,
+      await ata(base.userA, base.mintA, programA),
+    ],
+    [
+      "user B surplus account",
+      input.userBAtaB,
+      await ata(base.userB, base.mintB, programB),
+    ],
+  ] as const)
+    if (actual !== expected)
+      throw new ConfidentialError("Account", `Wrong Settle ${field}`);
 }

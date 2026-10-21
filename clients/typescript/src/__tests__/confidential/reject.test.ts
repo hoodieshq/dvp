@@ -19,7 +19,8 @@ test("reject with a partial refund leaves remaining escrow funds", async () => {
       f.config,
       await refundSession(f.config, instruction, {
         source: f.source(),
-        recipient: f.state(f.common.userBAtaB),
+        recipient: context.account(f.common.userBAtaB)!,
+        mint: context.account(f.common.mintB)!,
         amount: { kind: "partial", amount: f.amount / 2n },
       }),
     );

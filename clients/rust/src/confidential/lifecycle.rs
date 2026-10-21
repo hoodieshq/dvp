@@ -29,6 +29,24 @@ const MAX_HOOK_EXTRAS: usize = 32;
 const SINGLE_TRANSFER_CREDITS: u64 = 1;
 const PAYMENT_AND_SURPLUS_CREDITS: u64 = SINGLE_TRANSFER_CREDITS + SINGLE_TRANSFER_CREDITS;
 
+/// A recipient token account as fetched. Sessions bind it to the instruction's
+/// destination, Token-2022 and the leg B mint before reading its ElGamal key.
+#[derive(Clone, Copy)]
+pub struct RecipientAccount<'a> {
+    pub address: Pubkey,
+    pub owner: Pubkey,
+    pub data: &'a [u8],
+}
+
+/// A mint account as fetched. Sessions bind it to the leg B mint before
+/// reading its optional auditor key.
+#[derive(Clone, Copy)]
+pub struct MintAccount<'a> {
+    pub address: Pubkey,
+    pub owner: Pubkey,
+    pub data: &'a [u8],
+}
+
 pub struct TransferSource<'a> {
     pub state: &'a ConfidentialTransferAccount,
     pub keys: &'a EscrowKeys,
@@ -60,7 +78,13 @@ pub fn apply_session(
     mut args: ApplyConfidentialDvpInstructionArgs,
     source: TransferSource<'_>,
 ) -> Result<TransactionSession, ConfidentialError> {
-    let balance = read_escrow_balance(source.state, 0, source.keys, source.history)?;
+    // The program does not check the AE that Apply writes. When history is
+    // supplied, the snapshot must match it rather than only itself.
+    let balance = if source.history.is_empty() {
+        read_escrow_balance(source.state, 0, source.keys, source.history)?
+    } else {
+        recover_escrow_balance(source.state, 0, source.keys, source.history)?
+    };
     let amount = balance
         .available
         .checked_add(balance.pending)
@@ -74,9 +98,17 @@ pub struct SettleRequest<'a> {
     pub source: TransferSource<'a>,
     pub swap: &'a ConfidentialSwapDvp,
     pub expected_amount_b: u64,
-    pub recipient: &'a ConfidentialTransferAccount,
-    pub surplus_recipient: &'a ConfidentialTransferAccount,
-    pub auditor: Option<&'a ElGamalPubkey>,
+    pub recipient: RecipientAccount<'a>,
+    pub surplus_recipient: RecipientAccount<'a>,
+    /// Recipient keys from the trade agreement. When `None`, the key read from
+    /// the recipient snapshot is trusted.
+    pub expected_recipient: Option<&'a ElGamalPubkey>,
+    pub expected_surplus_recipient: Option<&'a ElGamalPubkey>,
+    /// Fetched leg B mint, the source of the optional auditor key.
+    pub mint: MintAccount<'a>,
+    /// Auditor from application configuration: `Some(None)` requires a mint
+    /// without auditor. When `None`, the mint snapshot is trusted.
+    pub expected_auditor: Option<Option<&'a ElGamalPubkey>>,
 }
 
 pub fn settle_session(
@@ -91,6 +123,7 @@ pub fn settle_session(
     {
         return Err(ConfidentialError::HookedSettleRequiresV1);
     }
+    check_settle_accounts(&accounts, request.swap)?;
     let source = request.source;
     check_escrow_keys(source.state, source.keys)?;
     if source.keys.encrypt_amount(request.expected_amount_b)? != request.swap.amount_b {
@@ -112,10 +145,27 @@ pub fn settle_session(
         } else {
             SINGLE_TRANSFER_CREDITS
         };
-    check_recipient(request.recipient, payment_credits)?;
-    if surplus > 0 {
-        check_recipient(request.surplus_recipient, payment_credits)?;
-    }
+    let mint = &request.swap.base.mint_b;
+    let recipient = read_recipient(
+        &request.recipient,
+        &accounts.user_a_destination_ata_b,
+        mint,
+        request.expected_recipient,
+    )?;
+    check_recipient(&recipient, payment_credits)?;
+    let surplus_recipient = if surplus > 0 {
+        let surplus_recipient = read_recipient(
+            &request.surplus_recipient,
+            &accounts.user_b_ata_b,
+            mint,
+            request.expected_surplus_recipient,
+        )?;
+        check_recipient(&surplus_recipient, payment_credits)?;
+        Some(surplus_recipient)
+    } else {
+        None
+    };
+    let auditor = read_auditor(&request.mint, mint, request.expected_auditor)?;
     let mut session = SessionBuilder::new(config, accounts.settlement_authority);
     let available = source
         .state
@@ -128,8 +178,8 @@ pub fn settle_session(
         &available,
         balance,
         request.expected_amount_b,
-        request.recipient,
-        request.auditor,
+        &recipient,
+        auditor.as_ref(),
     )?;
     [
         accounts.payment_equality_context,
@@ -169,15 +219,15 @@ pub fn settle_session(
     accounts.surplus_equality_context = None;
     accounts.surplus_validity_context = None;
     accounts.surplus_range_context = None;
-    let surplus_b = if surplus > 0 {
+    let surplus_b = if let Some(surplus_recipient) = &surplus_recipient {
         let transfer = prepare_transfer(
             &mut session,
             source.keys,
             &remaining,
             surplus,
             surplus,
-            request.surplus_recipient,
-            request.auditor,
+            surplus_recipient,
+            auditor.as_ref(),
         )?;
         [
             accounts.surplus_equality_context,
@@ -212,9 +262,15 @@ pub enum RefundAmount {
 
 pub struct RefundRequest<'a> {
     pub source: TransferSource<'a>,
-    pub recipient: &'a ConfidentialTransferAccount,
+    pub recipient: RecipientAccount<'a>,
+    /// When `None`, the key read from the recipient snapshot is trusted.
+    pub expected_recipient: Option<&'a ElGamalPubkey>,
     pub amount: RefundAmount,
-    pub auditor: Option<&'a ElGamalPubkey>,
+    /// Fetched leg B mint, the source of the optional auditor key.
+    pub mint: MintAccount<'a>,
+    /// `Some(None)` requires a mint without auditor. When `None`, the mint
+    /// snapshot is trusted.
+    pub expected_auditor: Option<Option<&'a ElGamalPubkey>>,
 }
 
 // Keep generated account sets directly usable without requiring callers to box them.
@@ -239,21 +295,35 @@ pub fn refund_session(
     leg_a_extras: &[AccountMeta],
     leg_b_extras: &[AccountMeta],
 ) -> Result<TransactionSession, ConfidentialError> {
-    let authority = match &instruction {
-        RefundInstruction::Reclaim(a) => a.signer,
-        RefundInstruction::Cancel(a) => a.settlement_authority,
-        RefundInstruction::Reject(a) => a.signer,
-        RefundInstruction::Recover(a, _) => a.signer,
+    let (authority, destination, mint) = match &instruction {
+        RefundInstruction::Reclaim(a) => (a.signer, a.signer_dest_ata, a.mint),
+        RefundInstruction::Cancel(a) => (a.settlement_authority, a.user_b_ata_b, a.mint_b),
+        RefundInstruction::Reject(a) => (a.signer, a.user_b_ata_b, a.mint_b),
+        RefundInstruction::Recover(a, _) => (a.signer, a.signer_dest_ata, a.mint),
     };
+    let recipient = |request: &RefundRequest<'_>| {
+        read_recipient(
+            &request.recipient,
+            &destination,
+            &mint,
+            request.expected_recipient,
+        )
+    };
+    let auditor =
+        |request: &RefundRequest<'_>| read_auditor(&request.mint, &mint, request.expected_auditor);
     let mut session = SessionBuilder::new(config, authority);
     let mut contexts = [None; 4];
     let refund = if let Some(request) = request {
         check_escrow_keys(request.source.state, request.source.keys)?;
-        let balance = read_available_balance(
-            request.source.state,
-            request.source.keys,
-            request.source.history,
-        )?;
+        // None needs only the all-zero ciphertext; reading the balance could
+        // fail on a false AE without history.
+        let balance = || {
+            read_available_balance(
+                request.source.state,
+                request.source.keys,
+                request.source.history,
+            )
+        };
         match request.amount {
             RefundAmount::None => {
                 if request.source.state.available_balance != Default::default() {
@@ -275,10 +345,10 @@ pub fn refund_session(
                     &mut session,
                     request.source.keys,
                     &available,
-                    balance,
+                    balance()?,
                     amount,
-                    request.recipient,
-                    request.auditor,
+                    &recipient(&request)?,
+                    auditor(&request)?.as_ref(),
                 )?;
                 for (out, key) in contexts.iter_mut().zip(transfer.contexts) {
                     *out = Some(key);
@@ -286,6 +356,7 @@ pub fn refund_session(
                 LegBRefund::Partial(transfer.data)
             }
             RefundAmount::Full => {
+                let balance = balance()?;
                 let available = request
                     .source
                     .state
@@ -298,8 +369,8 @@ pub fn refund_session(
                     &available,
                     balance,
                     balance,
-                    request.recipient,
-                    request.auditor,
+                    &recipient(&request)?,
+                    auditor(&request)?.as_ref(),
                 )?;
                 for (out, key) in contexts.iter_mut().zip(transfer.contexts) {
                     *out = Some(key);
@@ -377,6 +448,105 @@ pub fn refund_session(
         }
     };
     session.finish(vec![ix])
+}
+
+/// The program rejects any other account set, but only after the payer has
+/// funded proof contexts bound to `settlement_authority`; refuse before that.
+fn check_settle_accounts(
+    accounts: &SettleConfidentialDvp,
+    swap: &ConfidentialSwapDvp,
+) -> Result<(), ConfidentialError> {
+    use crate::verify::{find_swap_dvp_address, find_swap_dvp_escrow_ata as ata};
+    let base = &swap.base;
+    let (swap_dvp, _) = find_swap_dvp_address(
+        &base.settlement_authority,
+        &base.user_a,
+        &base.user_b,
+        &base.mint_a,
+        &base.mint_b,
+        base.nonce,
+    );
+    let (program_a, program_b) = (&base.token_program_a, &base.token_program_b);
+    for (field, matches) in [
+        (
+            "settlement authority",
+            accounts.settlement_authority == base.settlement_authority,
+        ),
+        ("swap", accounts.swap_dvp == swap_dvp),
+        ("mint A", accounts.mint_a == base.mint_a),
+        ("mint B", accounts.mint_b == base.mint_b),
+        ("token program A", accounts.token_program_a == *program_a),
+        ("token program B", accounts.token_program_b == *program_b),
+        (
+            "escrow A",
+            accounts.dvp_ata_a == ata(&swap_dvp, &base.mint_a, program_a),
+        ),
+        (
+            "escrow B",
+            accounts.dvp_ata_b == ata(&swap_dvp, &base.mint_b, program_b),
+        ),
+        (
+            "user A destination",
+            accounts.user_a_destination_ata_b
+                == ata(&base.user_a_settlement_destination, &base.mint_b, program_b),
+        ),
+        (
+            "user B destination",
+            accounts.user_b_destination_ata_a
+                == ata(&base.user_b_settlement_destination, &base.mint_a, program_a),
+        ),
+        (
+            "user A surplus account",
+            accounts.user_a_ata_a == ata(&base.user_a, &base.mint_a, program_a),
+        ),
+        (
+            "user B surplus account",
+            accounts.user_b_ata_b == ata(&base.user_b, &base.mint_b, program_b),
+        ),
+    ] {
+        if !matches {
+            return Err(ConfidentialError::Account(field));
+        }
+    }
+    Ok(())
+}
+
+fn read_auditor(
+    mint: &MintAccount<'_>,
+    expected_mint: &Pubkey,
+    expected: Option<Option<&ElGamalPubkey>>,
+) -> Result<Option<ElGamalPubkey>, ConfidentialError> {
+    let auditor = mint_auditor(mint, expected_mint)?;
+    // An RPC must neither substitute nor add an auditor; refuse before any proof.
+    if expected.is_some_and(|expected| auditor.as_ref() != expected) {
+        return Err(ConfidentialError::Account("mint auditor"));
+    }
+    Ok(auditor)
+}
+
+fn read_recipient(
+    recipient: &RecipientAccount<'_>,
+    destination: &Pubkey,
+    mint: &Pubkey,
+    expected_key: Option<&ElGamalPubkey>,
+) -> Result<ConfidentialTransferAccount, ConfidentialError> {
+    if recipient.address != *destination || recipient.owner != spl_token_2022_interface::ID {
+        return Err(ConfidentialError::Account("recipient address or owner"));
+    }
+    let account =
+        StateWithExtensions::<spl_token_2022_interface::state::Account>::unpack(recipient.data)
+            .map_err(|_| ConfidentialError::Account("recipient layout"))?;
+    if account.base.mint != *mint {
+        return Err(ConfidentialError::Account("recipient mint"));
+    }
+    let state = *account
+        .get_extension::<ConfidentialTransferAccount>()
+        .map_err(|_| ConfidentialError::Account("recipient CT extension"))?;
+    // An unauthenticated key would receive the amount; refuse before any proof.
+    if expected_key.is_some_and(|key| state.elgamal_pubkey != (*key).into()) {
+        return Err(ConfidentialError::Account("recipient ElGamal key"));
+    }
+    Ok(state)
 }
 
 fn check_recipient(
@@ -500,14 +670,16 @@ fn proof_error(error: impl std::fmt::Display) -> ConfidentialError {
     ConfidentialError::Proof(error.to_string())
 }
 
+/// Reads the optional auditor key of `mint`, which must be the account at
+/// `expected_mint` owned by Token-2022.
 pub fn mint_auditor(
-    owner: &Pubkey,
-    data: &[u8],
+    mint: &MintAccount<'_>,
+    expected_mint: &Pubkey,
 ) -> Result<Option<ElGamalPubkey>, ConfidentialError> {
-    if *owner != spl_token_2022_interface::ID {
-        return Err(ConfidentialError::Account("mint token program"));
+    if mint.address != *expected_mint || mint.owner != spl_token_2022_interface::ID {
+        return Err(ConfidentialError::Account("mint address or owner"));
     }
-    let mint = StateWithExtensions::<spl_token_2022_interface::state::Mint>::unpack(data)
+    let mint = StateWithExtensions::<spl_token_2022_interface::state::Mint>::unpack(mint.data)
         .map_err(|_| ConfidentialError::Account("mint layout"))?;
     let ct = mint.get_extension::<spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferMint>().map_err(|_| ConfidentialError::Account("mint CT extension"))?;
     Option::from(ct.auditor_elgamal_pubkey)

@@ -10,7 +10,9 @@ use std::borrow::Cow;
 use dvp_swap_program_client::{
     confidential::*,
     instructions::*,
-    verify::{decode_swap_dvp_account, ConfidentialSwapDvp, SwapDvpAccount},
+    verify::{
+        decode_swap_dvp_account, ConfidentialSwapDvp, ExpectedConfidentialTerms, SwapDvpAccount,
+    },
 };
 use litesvm::types::TransactionMetadata;
 use solana_account::Account;
@@ -219,6 +221,30 @@ impl ClientFixture {
             new_decryptable_available_balance: [0; 36],
         }
     }
+    /// The agreed public terms, taken from the Create arguments.
+    pub fn expected_terms(&self, amount_b: u64) -> ExpectedConfidentialTerms {
+        let (accounts, args) = (&self.dvp.accounts, &self.dvp.args);
+        ExpectedConfidentialTerms {
+            settlement_authority: accounts.settlement_authority,
+            user_a: accounts.user_a,
+            user_b: accounts.user_b,
+            mint_a: accounts.mint_a,
+            mint_b: accounts.mint_b,
+            token_program_a: accounts.token_program_a,
+            amount_a: args.amount_a,
+            amount_b,
+            nonce: args.nonce,
+            expiry_timestamp: args.expiry_timestamp,
+            earliest_settlement_timestamp: args.earliest_settlement_timestamp,
+            user_a_settlement_destination: args
+                .user_a_settlement_destination
+                .unwrap_or(accounts.user_a),
+            user_b_settlement_destination: args
+                .user_b_settlement_destination
+                .unwrap_or(accounts.user_b),
+        }
+    }
+
     pub fn settle_accounts(&self) -> SettleConfidentialDvp {
         let placeholder = Pubkey::default();
         SettleConfidentialDvp {
@@ -504,5 +530,92 @@ pub fn cleanup(
                 .map_or(0, |a| a.lamports),
             authority_before + authority_rent
         );
+    }
+}
+
+/// A fetched token account as a session recipient bound to `address`.
+pub fn recipient_account(address: Pubkey, account: &Account) -> RecipientAccount<'_> {
+    RecipientAccount {
+        address,
+        owner: account.owner,
+        data: &account.data,
+    }
+}
+
+/// A Token-2022 account for `mint` holding only the given CT extension, for
+/// session tests that need a recipient snapshot without ledger setup.
+pub fn ct_token_account(mint: Pubkey, ct: ConfidentialTransferAccount) -> Account {
+    use spl_token_2022_interface::{
+        extension::{BaseStateWithExtensionsMut, ExtensionType, StateWithExtensionsMut},
+        state::{Account as TokenAccount, AccountState},
+    };
+    let len = ExtensionType::try_calculate_account_len::<TokenAccount>(&[
+        ExtensionType::ConfidentialTransferAccount,
+    ])
+    .unwrap();
+    let mut data = vec![0; len];
+    let mut state =
+        StateWithExtensionsMut::<TokenAccount>::unpack_uninitialized(&mut data).unwrap();
+    state.base = TokenAccount {
+        mint,
+        owner: Pubkey::new_unique(),
+        state: AccountState::Initialized,
+        ..Default::default()
+    };
+    state.pack_base();
+    state.init_account_type().unwrap();
+    *state
+        .init_extension::<ConfidentialTransferAccount>(true)
+        .unwrap() = ct;
+    Account {
+        lamports: 1,
+        data,
+        owner: TOKEN,
+        executable: false,
+        rent_epoch: 0,
+    }
+}
+
+/// A fetched mint account as a session mint snapshot bound to `address`.
+pub fn mint_account(address: Pubkey, account: &Account) -> MintAccount<'_> {
+    MintAccount {
+        address,
+        owner: account.owner,
+        data: &account.data,
+    }
+}
+
+/// A Token-2022 mint with a confidential transfer extension and no auditor,
+/// for session tests without ledger setup.
+pub fn ct_mint_account() -> Account {
+    use spl_token_2022_interface::{
+        extension::{
+            confidential_transfer::ConfidentialTransferMint, BaseStateWithExtensionsMut,
+            ExtensionType, StateWithExtensionsMut,
+        },
+        state::Mint,
+    };
+    let len = ExtensionType::try_calculate_account_len::<Mint>(&[
+        ExtensionType::ConfidentialTransferMint,
+    ])
+    .unwrap();
+    let mut data = vec![0; len];
+    let mut state = StateWithExtensionsMut::<Mint>::unpack_uninitialized(&mut data).unwrap();
+    state.base = Mint {
+        decimals: 6,
+        is_initialized: true,
+        ..Default::default()
+    };
+    state.pack_base();
+    state.init_account_type().unwrap();
+    *state
+        .init_extension::<ConfidentialTransferMint>(true)
+        .unwrap() = ConfidentialTransferMint::default();
+    Account {
+        lamports: 1,
+        data,
+        owner: TOKEN,
+        executable: false,
+        rent_epoch: 0,
     }
 }

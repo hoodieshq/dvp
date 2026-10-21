@@ -69,9 +69,16 @@ export async function readEscrowAccount(
   return { state: confidentialState(token), public: token.amount };
 }
 
-export function mintAuditor(account: EncodedAccount): Uint8Array | undefined {
-  if (account.programAddress !== TOKEN_2022_PROGRAM_ADDRESS)
-    throw new ConfidentialError("Account", "Wrong mint program");
+/** Reads the optional auditor key of the Token-2022 mint at `expectedMint`. */
+export function mintAuditor(
+  account: EncodedAccount,
+  expectedMint: Address,
+): Uint8Array | undefined {
+  if (
+    account.address !== expectedMint ||
+    account.programAddress !== TOKEN_2022_PROGRAM_ADDRESS
+  )
+    throw new ConfidentialError("Account", "Wrong mint address or owner");
   const mint = getMintDecoder().decode(account.data);
   const ct = isSome(mint.extensions)
     ? mint.extensions.value.find((e) => e.__kind === "ConfidentialTransferMint")

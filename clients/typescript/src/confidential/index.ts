@@ -45,5 +45,9 @@ export {
 } from "./history";
 export { resolveConfidentialHookAccounts } from "./hooks";
 export type { AmountCiphertexts } from "./types";
-export { verifyConfidentialFunding } from "./verify";
+export {
+  verifyConfidentialFunding,
+  verifyConfidentialTerms,
+  type ExpectedConfidentialTerms,
+} from "./verify";
 export { ConfidentialError, type ConfidentialErrorCode } from "./errors";

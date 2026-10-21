@@ -13,7 +13,7 @@ upgrade and rollback validation.
 
 ## 1. Purpose
 
-Add an optional mode to DvP in which leg B (`mint_b`, `amount_b`, the payment) moves through the Token-2022 Confidential Transfer (CT) extension. The amount and the escrow balance exist on-chain only as ciphertexts, readable by `user_a`, `user_b` and `settlement_authority`. Leg A stays public.
+Add an optional mode to DvP in which leg B (`mint_b`, `amount_b`, the payment) moves through the Token-2022 Confidential Transfer (CT) extension. The amount and the escrow balance exist on-chain only as ciphertexts, readable by `user_a`, `user_b` and `settlement_authority`. Leg A stays public. This assumes authentic recipient keys (section 10).
 
 Preserved properties: atomic Settle; the Settle payment equals the agreed amount, enforced by the program, not by trusting the authority; each party authorizes recovery of its own funds without the other parties, subject to the seed and mint restrictions in section 10; funding without calling the program.
 
@@ -147,10 +147,17 @@ checks only the swap owner, layout and PDA:
 4. `0 < expected_amount_b < 2^48`.
 5. The escrow's `decryptable_available_balance` decrypts under `escrow_ae`, and that value matches the available ElGamal ciphertext. An authenticated but false AE value fails verification; repair it through a verified Apply before funding.
 
+Check 4 is the only lower bound on amount B: confidential Create cannot reject
+a zero amount (7.3), so a funder who skips it can fund leg A for no payment.
+
 These checks do not compare the public terms with the agreed trade. Callers
-must separately compare parties, mints, settlement authority, amount A,
+must also compare parties, mints, settlement authority, amount A,
 destinations, nonce, expiry and earliest settlement time before funding or
 settlement. A valid PDA and amount B do not prove agreement on those terms.
+Rust `verify::verify_confidential_terms` and TypeScript
+`verifyConfidentialTerms` do both: they take the agreed terms, require the swap
+at their PDA (covering parties, mints, settlement authority and nonce), run
+these checks and compare the remaining public terms.
 
 ### 4.5 Test vectors
 
@@ -350,7 +357,7 @@ Steps, after all CreateDvp checks (`ZeroAmount` applies to `amount_a` only):
 2. Create the escrow B ATA and run `verify_escrow_not_preloaded` before `Reallocate`, since it compares lamports with the rent of the current size.
 3. Escrow B's public `amount == 0`, else `EscrowPublicBalanceNotEmpty`. Its address is predictable, so it could hold someone else's public tokens before Create. Those are recovered through a public swap on the same seeds (`CreateDvp`, then Reclaim); the confidential swap uses another nonce.
 4. PDA signs: `Reallocate` (adds `ConfidentialTransferAccount`, payer funds) → `ConfigureAccount` (`decryptable_zero_balance`, `maximum_pending_balance_credit_counter = 65536`, PubkeyValidity read through the instructions sysvar) → `DisableNonConfidentialCredits`.
-5. Allocate 586 bytes; store the base with `amount_b = u64::MAX`, and the ciphertexts as the tail. They are stored unchecked: the bounds on `amount_b` are a client check (4.4).
+5. Allocate 586 bytes; store the base with `amount_b = u64::MAX`, and the ciphertexts as the tail. They are stored unchecked: the bounds on `amount_b` are a client check (4.4). Confidential Create therefore cannot reject an encryption of zero; only the funder's check 4 in 4.4 catches it.
 
 `ConfigureAccount` sets `approved` from the mint's `auto_approve_new_accounts`. On a manual-approval mint escrow B stays unapproved: it can be neither funded nor used as a transfer source until the mint's CT authority calls `ApproveAccount` on it. Clients check `approved` before funding.
 
@@ -588,9 +595,11 @@ Known limitations, not prevented by the program:
 - A hook authority or changed hook behavior can block CT transfers after successful funding, including Reclaim and Recover of leg B (section 8). Atomic rollback protects balances but does not guarantee eventual recovery. Preparatory proof contexts from earlier transactions remain open after a failed final transaction and require separate cleanup by their authority.
 - A party can invalidate prepared Settle proofs by calling Apply after a pending credit; the proofs are rebuilt. The same party could abort the swap with Reject anyway.
 - Metadata stays public: which instruction was used, account sizes and counts, whether there was a surplus, timing.
-- The mint auditor, if configured, sees all amounts.
+- The mint auditor, if configured, sees all amounts. An auditor key substituted or added through a forged mint snapshot would also receive a decryption handle for every proof built from it, for the same reason as the recipient keys below. Both clients bind the mint snapshot to `mint_b` and accept the expected auditor as optional input, refusing to build any proof on a mismatch; without it the mint snapshot is trusted.
+- Confidentiality of the Settle and refund amounts assumes authentic recipient ElGamal keys. This follows from Token-2022 confidential transfers, not from DvP: every sender reads the recipient's key from account state served by an RPC, and neither Token-2022 nor the ZK ElGamal proof program binds a proof to the intended recipient before the proof is published. A failed final transaction still leaves its preparation proofs on chain, so DvP cannot close this on chain. Recipient keys belong to the recipients' own token accounts and cannot be derived from the shared seed. Both clients bind each recipient snapshot to the instruction's destination, Token-2022 and `mint_b`, and accept the expected recipient keys as optional input, refusing to build any proof on a mismatch. The party building Settle or refund proofs must either supply expected keys, for example from the trade agreement, or read account state from an RPC it trusts.
 - `user_b` can block Cancel and Reject indefinitely by making its own `mint_b` ATA not ready (for example, disabling confidential credits). `user_a` still reclaims leg A, but the swap cannot close.
 - Any party can write a wrong `new_decryptable_available_balance` through Apply. The others can rebuild the escrow balance from complete transaction history and the proof data used by those transactions; direct ElGamal decoding only works up to 32 bits. Both clients replay inline proofs, SPL Record writes and ConfidentialMint/Burn. Writes to a pre-existing Record with no initialization in the supplied history are ignored unless a relevant proof needs its bytes. Such Records and proofs stored by other programs require historical account bytes through Rust `BalanceHistory::push_with_proof_accounts` or the resolver argument to TypeScript `BalanceHistory.push`; ordinary RPC transaction metadata alone does not contain them. Missing data can prevent recovery of an unknown large balance. All reconstructed available and pending limbs and the pending counter must match the account snapshot.
+- RPC history affects recovery availability, not balance integrity. Neither client verifies transaction signatures, and the parts of a `getTransaction` response that replay depends on (error status, inner instructions, loaded addresses) are not covered by any signature. RPC metadata lists inner-instruction groups only for instructions that made CPIs, so a client cannot tell an omitted group from an instruction without CPIs and treats a missing group as no CPIs. Replay also follows the reported order of inner instructions; an honest node reports CPIs in execution order, and DvP closes its proof contexts only after the transfer that uses them. A dishonest or faulty RPC can forge, withhold or omit history, including whole inner-instruction groups, or reorder it, and so block recovery, but it cannot make a client accept a false balance, because every reconstructed limb and the pending counter must match the snapshot. Take history for the fallback from a trusted or cross-checked source.
 - The mint authority can mint public tokens into escrow B (`MintTo` ignores `DisableNonConfidentialCredits`). They go to `user_b` (7.2), and escrow B stays open until then.
 - A Settle surplus above 2^48 − 1 needs a `Partial` Reclaim by `user_b` first (7.5).
 

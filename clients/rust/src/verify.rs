@@ -1,7 +1,7 @@
 //! Checked, verify-before-fund helpers for the DvP swap client.
 //!
-//! The generated readers Borsh-decode any bytes at an address with no owner
-//! or size check. Escrows are funded by raw token transfers to an ATA derived
+//! The generated readers Borsh-decode any 458-byte account with no owner or
+//! PDA check. Escrows are funded by raw token transfers to an ATA derived
 //! from the `swap_dvp` pubkey, so an attacker-owned account that decodes as a
 //! `SwapDvp` lets a funder deposit into an ATA the attacker can drain.
 //!
@@ -50,6 +50,16 @@ impl SwapDvpAccount {
             Self::Confidential(state) => &state.base,
         }
     }
+
+    /// Terms of a public swap, or `None` for a confidential one. Use this,
+    /// not [`Self::base`], when a public-only integration decides whether to
+    /// fund.
+    pub fn public(&self) -> Option<&SwapDvp> {
+        match self {
+            Self::Public(base) => Some(base),
+            Self::Confidential(_) => None,
+        }
+    }
 }
 
 /// Seed prefix for the `SwapDvp` PDA (matches `SWAP_DVP_SEED` on-chain).
@@ -58,6 +68,10 @@ pub const SWAP_DVP_SEED: &[u8] = b"dvp";
 /// Canonical SPL Associated Token Account program.
 pub const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
     pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+
+/// Token programs the DvP program accepts for either leg.
+const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_2022_PROGRAM_ID: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
 /// Why a fetched account was rejected as a canonical `SwapDvp`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +181,10 @@ pub fn find_swap_dvp_escrow_ata(
 /// Verifies raw account fields (owner, size, layout, canonical PDA) and
 /// returns the decoded mode and terms. Core used by `decode_swap_dvp_account`;
 /// available without the `fetch` feature.
+///
+/// `data` must be the full account data. Do not pass data fetched with an
+/// RPC `data_slice`: a 458-byte prefix of a confidential account decodes as
+/// public.
 pub fn verify_swap_dvp_bytes(
     expected_address: &Pubkey,
     owner: &Pubkey,
@@ -201,6 +219,14 @@ pub fn verify_swap_dvp_bytes(
         actual => return Err(SwapDvpVerifyError::UnsupportedSize { actual }),
     };
     let dvp = state.base();
+
+    for (leg, program) in [("A", &dvp.token_program_a), ("B", &dvp.token_program_b)] {
+        if *program != SPL_TOKEN_PROGRAM_ID && *program != TOKEN_2022_PROGRAM_ID {
+            return Err(SwapDvpVerifyError::Malformed(format!(
+                "unsupported token program {leg}: {program}"
+            )));
+        }
+    }
 
     let (expected_pda, _bump) = find_swap_dvp_address(
         &dvp.settlement_authority,
@@ -264,6 +290,101 @@ pub fn verify_confidential_funding(
     Ok((swap, escrow))
 }
 
+/// Public terms of an agreed confidential trade. Destinations are resolved:
+/// Create stores a user's own address when no destination is given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpectedConfidentialTerms {
+    pub settlement_authority: Pubkey,
+    pub user_a: Pubkey,
+    pub user_b: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub token_program_a: Pubkey,
+    pub amount_a: u64,
+    pub amount_b: u64,
+    pub nonce: u64,
+    pub expiry_timestamp: i64,
+    pub earliest_settlement_timestamp: Option<i64>,
+    pub user_a_settlement_destination: Pubkey,
+    pub user_b_settlement_destination: Pubkey,
+}
+
+/// Swap and escrow B checked against [`ExpectedConfidentialTerms`], with both
+/// canonical escrow addresses. Fund these, not counterparty-supplied addresses.
+#[cfg(all(feature = "fetch", feature = "confidential"))]
+#[derive(Clone, Debug)]
+pub struct VerifiedConfidentialTerms {
+    pub swap_address: Pubkey,
+    pub swap: ConfidentialSwapDvp,
+    pub escrow_a: Pubkey,
+    pub escrow_b: Pubkey,
+    pub state:
+        spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferAccount,
+}
+
+/// Funding and settlement gate: [`verify_confidential_funding`] at the swap
+/// PDA and escrow B derived from `terms`, then every public term compared
+/// with the agreed trade. The PDA covers the parties, mints, settlement
+/// authority and nonce; the ciphertexts cover amount B.
+#[cfg(all(feature = "fetch", feature = "confidential"))]
+pub fn verify_confidential_terms(
+    swap_account: &solana_account::Account,
+    escrow_b_account: &solana_account::Account,
+    keys: &crate::confidential::EscrowKeys,
+    terms: &ExpectedConfidentialTerms,
+) -> Result<VerifiedConfidentialTerms, crate::confidential::ConfidentialError> {
+    use crate::confidential::ConfidentialError;
+    let (swap_address, _) = find_swap_dvp_address(
+        &terms.settlement_authority,
+        &terms.user_a,
+        &terms.user_b,
+        &terms.mint_a,
+        &terms.mint_b,
+        terms.nonce,
+    );
+    let escrow_b = find_swap_dvp_escrow_ata(&swap_address, &terms.mint_b, &TOKEN_2022_PROGRAM_ID);
+    let (swap, state) = verify_confidential_funding(
+        &swap_address,
+        swap_account,
+        &escrow_b,
+        escrow_b_account,
+        keys,
+        terms.amount_b,
+    )?;
+    let base = &swap.base;
+    for (field, matches) in [
+        (
+            "token program A",
+            base.token_program_a == terms.token_program_a,
+        ),
+        ("amount A", base.amount_a == terms.amount_a),
+        ("expiry", base.expiry_timestamp == terms.expiry_timestamp),
+        (
+            "earliest settlement",
+            base.earliest_settlement_timestamp == terms.earliest_settlement_timestamp,
+        ),
+        (
+            "user A settlement destination",
+            base.user_a_settlement_destination == terms.user_a_settlement_destination,
+        ),
+        (
+            "user B settlement destination",
+            base.user_b_settlement_destination == terms.user_b_settlement_destination,
+        ),
+    ] {
+        if !matches {
+            return Err(ConfidentialError::Account(field));
+        }
+    }
+    Ok(VerifiedConfidentialTerms {
+        swap_address,
+        swap,
+        escrow_a: find_swap_dvp_escrow_ata(&swap_address, &terms.mint_a, &terms.token_program_a),
+        escrow_b,
+        state,
+    })
+}
+
 /// Query both exact account sizes. Every result is checked against its owner and
 /// canonical PDA before being returned; unrelated or malformed accounts are skipped.
 /// RPC failures still propagate. Fetch escrow snapshots separately for
@@ -311,8 +432,8 @@ mod tests {
             mint_a: Pubkey::new_from_array([3u8; 32]),
             mint_b: Pubkey::new_from_array([4u8; 32]),
             settlement_authority: Pubkey::new_from_array([5u8; 32]),
-            token_program_a: Pubkey::new_from_array([6u8; 32]),
-            token_program_b: Pubkey::new_from_array([7u8; 32]),
+            token_program_a: SPL_TOKEN_PROGRAM_ID,
+            token_program_b: TOKEN_2022_PROGRAM_ID,
             amount_a: 1_000,
             amount_b: 2_500,
             expiry_timestamp: 1_780_000_000,
@@ -394,6 +515,24 @@ mod tests {
     }
 
     #[test]
+    fn generated_from_bytes_requires_the_public_layout() {
+        // Patched by scripts/lib/patch-swap-dvp-exact-size.ts: the generated
+        // reader must not return the base of a 586-byte confidential account.
+        let bytes = on_chain_bytes(&sample());
+        assert_eq!(SwapDvp::from_bytes(&bytes).unwrap(), sample());
+        let mut confidential = bytes.clone();
+        confidential.resize(CONFIDENTIAL_SWAP_DVP_ACCOUNT_LEN, 7);
+        let mut short = Vec::new();
+        sample().serialize(&mut short).unwrap();
+        for data in [confidential, short] {
+            assert_eq!(
+                SwapDvp::from_bytes(&data).unwrap_err().kind(),
+                std::io::ErrorKind::InvalidData
+            );
+        }
+    }
+
+    #[test]
     fn strict_try_from_bytes_rejects_oversize() {
         let mut over = on_chain_bytes(&sample());
         over.push(0);
@@ -440,6 +579,30 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_unsupported_token_programs() {
+        for leg_b in [false, true] {
+            let mut dvp = sample();
+            let fake = Pubkey::new_from_array([6u8; 32]);
+            if leg_b {
+                dvp.token_program_b = fake;
+            } else {
+                dvp.token_program_a = fake;
+            }
+            let (addr, _) = find_swap_dvp_address(
+                &dvp.settlement_authority,
+                &dvp.user_a,
+                &dvp.user_b,
+                &dvp.mint_a,
+                &dvp.mint_b,
+                dvp.nonce,
+            );
+            let err = verify_swap_dvp_bytes(&addr, &DVP_SWAP_PROGRAM_ID, &on_chain_bytes(&dvp))
+                .unwrap_err();
+            assert!(matches!(err, SwapDvpVerifyError::Malformed(_)));
+        }
+    }
+
+    #[test]
     fn verify_accepts_canonical_program_owned_account() {
         let dvp = sample();
         let (addr, _) = find_swap_dvp_address(
@@ -452,6 +615,7 @@ mod tests {
         );
         let parsed =
             verify_swap_dvp_bytes(&addr, &DVP_SWAP_PROGRAM_ID, &on_chain_bytes(&dvp)).unwrap();
+        assert_eq!(parsed.public(), Some(&dvp));
         assert_eq!(parsed, SwapDvpAccount::Public(dvp));
     }
 
@@ -476,8 +640,10 @@ mod tests {
         let mut data = on_chain_bytes(&base);
         data.extend_from_slice(&amount.lo);
         data.extend_from_slice(&amount.hi);
+        let parsed = verify_swap_dvp_bytes(&address, &DVP_SWAP_PROGRAM_ID, &data).unwrap();
+        assert_eq!(parsed.public(), None);
         assert_eq!(
-            verify_swap_dvp_bytes(&address, &DVP_SWAP_PROGRAM_ID, &data).unwrap(),
+            parsed,
             SwapDvpAccount::Confidential(ConfidentialSwapDvp {
                 base: base.clone(),
                 amount_b: amount

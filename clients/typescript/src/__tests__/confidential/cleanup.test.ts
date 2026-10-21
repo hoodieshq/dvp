@@ -16,8 +16,9 @@ test("clean up interrupted v0 preparation and rebuild the session", async () => 
       source: f.source(),
       swap: f.swap(),
       expectedAmountB: f.amount,
-      recipient: f.state(address(f.recipient)),
-      surplusRecipient: f.state(f.common.userBAtaB),
+      recipient: context.account(address(f.recipient))!,
+      mint: context.account(f.common.mintB)!,
+      surplusRecipient: context.account(f.common.userBAtaB)!,
     };
     const session = await settleSession(f.config, f.settle, request);
     await send(context, f.config, session.preparation[0]!);

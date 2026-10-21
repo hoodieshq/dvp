@@ -15,8 +15,8 @@ pub use history::{BalanceHistory, ExecutedTransaction};
 pub use keys::{derive_shared_seed, EscrowKeys};
 pub use lifecycle::{
     apply_session, create_session, mint_auditor, refund_session,
-    resolve_confidential_hook_accounts, settle_session, RefundAmount, RefundInstruction,
-    RefundRequest, SettleRequest, TransferSource,
+    resolve_confidential_hook_accounts, settle_session, MintAccount, RecipientAccount,
+    RefundAmount, RefundInstruction, RefundRequest, SettleRequest, TransferSource,
 };
 pub use transaction::{PlannedTransaction, SessionConfig, TransactionFormat, TransactionSession};
 

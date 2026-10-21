@@ -10,7 +10,7 @@
     "test:unit": "tsc -p clients/typescript/tsconfig.tests.json && tsx --test \"clients/typescript/src/__tests__/*.test.ts\" clients/typescript/src/__tests__/confidential/keys.test.ts clients/typescript/src/__tests__/confidential/transaction.test.ts",
     "build": "cd clients/typescript && tsc",
     "generate-clients": "tsx ./scripts/generate-clients.ts",
-    "generate-idl": "cd program && cargo check --features idl",
+    "generate-idl": "cd program && cargo check --locked --features idl",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

@@ -71,12 +71,15 @@ recommended for the shared escrow:
 
 **Each participant, including the settlement authority:**
 
-- Before funding, run `verify_confidential_funding` / `verifyConfidentialFunding`
-  with the received seed's keys and agreed amount B. Separately compare the
+- Before funding, run `verify_confidential_terms` / `verifyConfidentialTerms`
+  with the received seed's keys and the agreed terms, which also compares the
   public terms with the agreed trade ([spec 4.4](spec.md#44-verification-before-funding)).
 - Store the seed encrypted at rest, indexed by `swap_dvp`, separately from
   signing keys. Exclude it from logs, analytics and error reports. Derive escrow
   keys as needed; in TypeScript call `keys.free()` to release WASM allocations.
+- Never serialize, log or include escrow keys or their fields in error reports.
+  In Rust the `EscrowKeys` fields are public and the SDK `ElGamalKeypair`
+  serializes its secret.
 - Retain the seed until **escrow B is closed**, including Apply and Recover
   after settlement or swap closure. It can then be deleted if historical
   decryption is no longer needed. Deletion cannot revoke copies held by others.

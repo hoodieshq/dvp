@@ -9,11 +9,12 @@ import {
   applySession,
   createSession,
   readEscrowAccount,
-  verifyConfidentialFunding,
+  verifyConfidentialTerms,
   type ApplySessionInput,
   type ConfidentialTransferAccount,
   type CreateSessionInput,
   type EscrowKeys,
+  type ExpectedConfidentialTerms,
   type SessionConfig,
   type SettleSessionInput,
   type TransactionSession,
@@ -23,7 +24,8 @@ import { prepareSettlement } from "./settle";
 /**
  * Exact-payment happy path, without hooks or an auditor. Mints, funded wallets
  * and receiving token accounts already exist; v0 also needs an active LUT.
- * Supply generated inputs for the same agreed deal and keys derived from its seed.
+ * Supply generated inputs and the expected terms of the same agreed deal, and
+ * keys derived from its seed.
  * The caller owns the keys and frees them after the workflow ends.
  */
 export async function runSwap(
@@ -35,7 +37,7 @@ export async function runSwap(
     settle: SettleSessionInput;
   },
   keys: EscrowKeys,
-  amountB: bigint,
+  terms: ExpectedConfidentialTerms,
   wallet: {
     // Confirm each session before returning. Retain it for cleanup on failure.
     // This can call sendSession from send-session.ts with your RPC sender.
@@ -52,9 +54,12 @@ export async function runSwap(
   },
 ) {
   // Create the swap and configure its confidential escrow.
-  await wallet.send(createSession(config, accounts.create, keys, amountB));
+  await wallet.send(
+    createSession(config, accounts.create, keys, terms.amountB),
+  );
 
-  // Verify the on-chain swap, escrow key and private amount before either party funds.
+  // Verify the on-chain swap, escrow key, private amount and every public term
+  // against the agreed trade before either party funds.
   const snapshots = await fetchEncodedAccounts(
     rpc,
     [accounts.create.swapDvp, accounts.create.dvpAtaB] as const,
@@ -64,18 +69,19 @@ export async function runSwap(
   const [swap, escrow] = snapshots;
   if (!swap || !escrow)
     throw new Error("RPC returned an incomplete funding snapshot");
-  const checked = await verifyConfidentialFunding(
+  const checked = await verifyConfidentialTerms(
     swap,
     escrow,
     keys,
-    amountB,
+    terms,
     config.programAddress,
   );
+  // Fund the canonical escrows derived from the agreed terms.
   await wallet.fund({
-    escrowA: accounts.create.dvpAtaA,
-    escrowB: accounts.create.dvpAtaB,
-    amountA: checked.swap.base.amountA,
-    amountB,
+    escrowA: checked.escrowA,
+    escrowB: checked.escrowB,
+    amountA: terms.amountA,
+    amountB: terms.amountB,
     recipient: checked.state,
   });
 
@@ -104,7 +110,7 @@ export async function runSwap(
     config,
     accounts.settle,
     keys,
-    amountB,
+    terms,
   );
   await wallet.send(settlement);
 }

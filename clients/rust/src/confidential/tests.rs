@@ -232,6 +232,72 @@ fn history_skips_failed_transactions_and_rejects_missing_context() {
 }
 
 #[test]
+fn apply_with_history_rejects_a_snapshot_that_history_contradicts() {
+    use crate::generated::instructions::{
+        ApplyConfidentialDvp, ApplyConfidentialDvpInstructionArgs,
+    };
+    let keys = EscrowKeys::from_seed(&[6; 32]).unwrap();
+    let encrypt = |amount: u64| -> solana_zk_sdk_pod::encryption::elgamal::PodElGamalCiphertext {
+        keys.elgamal.pubkey().encrypt(amount).into()
+    };
+    let snapshot = |available: u64, pending: u64, counter: u64| ConfidentialTransferAccount {
+        elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
+        available_balance: encrypt(available),
+        decryptable_available_balance: keys.ae.encrypt(available).into(),
+        pending_balance_lo: encrypt(pending),
+        pending_balance_hi: encrypt(0),
+        pending_balance_credit_counter: counter.into(),
+        ..Default::default()
+    };
+    let apply = |state: &ConfidentialTransferAccount, history: &[BalanceEvent]| {
+        let pubkey = Pubkey::new_unique();
+        apply_session(
+            &SessionConfig::new(pubkey, TransactionFormat::V1, Default::default()),
+            &ApplyConfidentialDvp {
+                signer: pubkey,
+                swap_dvp: pubkey,
+                nonce_tombstone: pubkey,
+                dvp_ata_b: pubkey,
+                token_program: spl_token_2022_interface::ID,
+            },
+            ApplyConfidentialDvpInstructionArgs {
+                expected_pending_balance_credit_counter: 0,
+                new_decryptable_available_balance: [0; 36],
+                settlement_authority: pubkey,
+                user_a: pubkey,
+                user_b: pubkey,
+                mint_a: pubkey,
+                mint_b: pubkey,
+                nonce: 0,
+            },
+            TransferSource {
+                state,
+                keys: &keys,
+                history,
+            },
+        )
+    };
+    // A consistent snapshot passes the fast path, but supplied history wins:
+    // forged pending limbs (DVP-9) and a replayed zero available balance
+    // (DVP-19) must both be rejected.
+    let forged_pending = snapshot(0, 7, 1);
+    assert!(apply(&forged_pending, &[]).is_ok());
+    assert!(apply(&forged_pending, &[BalanceEvent::Deposit(7)]).is_ok());
+    assert!(matches!(
+        apply(&forged_pending, &[BalanceEvent::Deposit(5)]),
+        Err(ConfidentialError::IncompleteHistory)
+    ));
+    let replayed_zero = snapshot(0, 0, 0);
+    assert!(matches!(
+        apply(
+            &replayed_zero,
+            &[BalanceEvent::Deposit(5), BalanceEvent::Apply]
+        ),
+        Err(ConfidentialError::IncompleteHistory)
+    ));
+}
+
+#[test]
 fn oversized_plan_returns_an_error() {
     let config = SessionConfig::new(
         Pubkey::new_unique(),
@@ -250,6 +316,33 @@ fn oversized_plan_returns_an_error() {
         plan.message(&config, Default::default()),
         Err(ConfidentialError::TransactionTooLarge { .. })
     ));
+}
+
+#[test]
+fn proof_accounts_reject_rent_above_the_default() {
+    use solana_zk_elgamal_proof_interface::instruction::ProofInstruction;
+    use solana_zk_sdk::zk_elgamal_proof_program::build_zero_ciphertext_proof_data;
+    let keys = EscrowKeys::from_seed(&[5; 32]).unwrap();
+    let zero =
+        build_zero_ciphertext_proof_data(&keys.elgamal, &keys.elgamal.pubkey().encrypt(0u64))
+            .unwrap();
+    let rent = |lamports_per_byte| Rent {
+        lamports_per_byte,
+        ..Default::default()
+    };
+    let default = Rent::default().lamports_per_byte;
+    // An untrusted Rent may overpay the payer's lamports to the authority,
+    // or overflow the rent calculation.
+    for (rent, accepted) in [
+        (rent(default), true),
+        (rent(default + 1), false),
+        (rent(u64::MAX), false),
+    ] {
+        let config = SessionConfig::new(Pubkey::new_unique(), TransactionFormat::V1, rent);
+        let result = super::transaction::SessionBuilder::new(&config, Pubkey::new_unique())
+            .proof(ProofInstruction::VerifyZeroCiphertext, &zero);
+        assert_eq!(result.is_ok(), accepted);
+    }
 }
 
 #[test]
@@ -446,6 +539,203 @@ fn history_decodes_inline_and_record_validity_proofs() {
                 .pending,
             (3 << AMOUNT_LO_BITS) + 42
         );
+    }
+}
+
+#[test]
+fn validity_verification_without_authority_keeps_the_real_context() {
+    use solana_instruction::AccountMeta;
+    use solana_zk_elgamal_proof_interface::instruction::{ContextStateInfo, ProofInstruction};
+    use solana_zk_sdk::{
+        encryption::grouped_elgamal::GroupedElGamal,
+        zk_elgamal_proof_program::build_batched_grouped_ciphertext_3_handles_validity_proof_data,
+    };
+    use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+    let proof = |keys: [&EscrowKeys; 3], lo: u64, hi: u64| {
+        let pubkeys = keys.map(|k| k.elgamal.pubkey());
+        let grouped_lo = GroupedElGamal::encrypt_with(pubkeys, lo, &keys[1].opening_lo);
+        let grouped_hi = GroupedElGamal::encrypt_with(pubkeys, hi, &keys[1].opening_hi);
+        let data = build_batched_grouped_ciphertext_3_handles_validity_proof_data(
+            pubkeys[0],
+            pubkeys[1],
+            pubkeys[2],
+            &grouped_lo,
+            &grouped_hi,
+            lo,
+            hi,
+            &keys[1].opening_lo,
+            &keys[1].opening_hi,
+        )
+        .unwrap();
+        (data, grouped_lo, grouped_hi)
+    };
+    let keys = EscrowKeys::from_seed(&[2; 32]).unwrap();
+    let (real, grouped_lo, grouped_hi) = proof(
+        [
+            &EscrowKeys::from_seed(&[1; 32]).unwrap(),
+            &keys,
+            &EscrowKeys::from_seed(&[3; 32]).unwrap(),
+        ],
+        42,
+        3,
+    );
+    let attacker = EscrowKeys::from_seed(&[4; 32]).unwrap();
+    let (forged, _, _) = proof([&attacker, &attacker, &attacker], 7, 1);
+    let escrow = Pubkey::new_unique();
+    let authority = Pubkey::new_unique();
+    let equality = Pubkey::new_unique();
+    let validity = Pubkey::new_unique();
+    let range = Pubkey::new_unique();
+    let record = Pubkey::new_unique();
+    let verify = ProofInstruction::VerifyBatchedGroupedCiphertext3HandlesValidity;
+    // Without the authority account the proof program verifies and creates
+    // nothing, so these must not replace the real context.
+    let mut inline = verify.encode_verify_proof(None, &forged);
+    inline.accounts.push(AccountMeta::new(validity, false));
+    let mut from_record = verify.encode_verify_proof_from_account(
+        None,
+        &record,
+        spl_record::state::RecordData::WRITABLE_START_INDEX as u32,
+    );
+    from_record.accounts.push(AccountMeta::new(validity, false));
+    let state = ConfidentialTransferAccount {
+        elgamal_pubkey: (*keys.elgamal.pubkey()).into(),
+        pending_balance_lo: grouped_lo.to_elgamal_ciphertext(1).unwrap().into(),
+        pending_balance_hi: grouped_hi.to_elgamal_ciphertext(1).unwrap().into(),
+        pending_balance_credit_counter: 1.into(),
+        decryptable_available_balance: keys.ae.encrypt(0).into(),
+        ..Default::default()
+    };
+    for poison in [inline, from_record] {
+        let mut instructions = vec![verify.encode_verify_proof(
+            Some(ContextStateInfo {
+                context_state_account: &validity,
+                context_state_authority: &authority,
+            }),
+            &real,
+        )];
+        instructions.push(poison);
+        instructions.extend(
+            spl_token_2022_interface::extension::confidential_transfer::instruction::transfer(
+                &spl_token_2022_interface::ID,
+                &Pubkey::new_unique(),
+                &Pubkey::new_unique(),
+                &escrow,
+                &Default::default(),
+                &Default::default(),
+                &Default::default(),
+                &authority,
+                &[],
+                ProofLocation::ContextStateAccount(&equality),
+                ProofLocation::ContextStateAccount(&validity),
+                ProofLocation::ContextStateAccount(&range),
+            )
+            .unwrap(),
+        );
+        let mut history = BalanceHistory::new(escrow);
+        history
+            .push_with_proof_accounts(
+                &ExecutedTransaction {
+                    instructions,
+                    inner_instructions: Default::default(),
+                    succeeded: true,
+                },
+                |_| {
+                    let mut data = vec![0; spl_record::state::RecordData::WRITABLE_START_INDEX];
+                    data.extend_from_slice(bytemuck::bytes_of(&forged));
+                    Some(data)
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            recover_escrow_balance(&state, 0, &keys, history.events())
+                .unwrap()
+                .pending,
+            (3 << AMOUNT_LO_BITS) + 42
+        );
+    }
+}
+
+#[test]
+fn transfer_with_fee_replays_as_transfer_in_both_directions() {
+    use solana_zk_sdk::{
+        encryption::grouped_elgamal::GroupedElGamal,
+        zk_elgamal_proof_program::build_batched_grouped_ciphertext_3_handles_validity_proof_data,
+    };
+    use spl_token_2022_interface::extension::confidential_transfer::instruction::{
+        ConfidentialTransferInstruction, TransferInstructionData, TransferWithFeeInstructionData,
+    };
+    use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+    let keys = [1, 2, 3].map(|seed| EscrowKeys::from_seed(&[seed; 32]).unwrap());
+    let pubkeys = [0, 1, 2].map(|i| keys[i].elgamal.pubkey());
+    let grouped_lo = GroupedElGamal::encrypt_with(pubkeys, 42u64, &keys[1].opening_lo);
+    let grouped_hi = GroupedElGamal::encrypt_with(pubkeys, 3u64, &keys[1].opening_hi);
+    let proof = build_batched_grouped_ciphertext_3_handles_validity_proof_data(
+        pubkeys[0],
+        pubkeys[1],
+        pubkeys[2],
+        &grouped_lo,
+        &grouped_hi,
+        42,
+        3,
+        &keys[1].opening_lo,
+        &keys[1].opening_hi,
+    )
+    .unwrap();
+    let (source, destination) = (Pubkey::new_unique(), Pubkey::new_unique());
+    let transfer =
+        spl_token_2022_interface::extension::confidential_transfer::instruction::transfer(
+            &spl_token_2022_interface::ID,
+            &source,
+            &Pubkey::new_unique(),
+            &destination,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Pubkey::new_unique(),
+            &[],
+            ProofLocation::ContextStateAccount(&Pubkey::new_unique()),
+            ProofLocation::InstructionOffset(std::num::NonZeroI8::new(1).unwrap(), &proof),
+            ProofLocation::ContextStateAccount(&Pubkey::new_unique()),
+        )
+        .unwrap();
+    // On a mint without TransferFeeConfig, Token-2022 runs TransferWithFee
+    // with the Transfer accounts and proofs, ignoring the fee offsets.
+    let mut with_fee = transfer.clone();
+    let token = with_fee.iter_mut().find(|ix| ix.data.len() > 2).unwrap();
+    let data: TransferInstructionData = *bytemuck::from_bytes(&token.data[2..]);
+    token.data = vec![
+        token.data[0],
+        ConfidentialTransferInstruction::TransferWithFee as u8,
+    ];
+    token
+        .data
+        .extend_from_slice(bytemuck::bytes_of(&TransferWithFeeInstructionData {
+            new_source_decryptable_available_balance: data.new_source_decryptable_available_balance,
+            transfer_amount_auditor_ciphertext_lo: data.transfer_amount_auditor_ciphertext_lo,
+            transfer_amount_auditor_ciphertext_hi: data.transfer_amount_auditor_ciphertext_hi,
+            equality_proof_instruction_offset: data.equality_proof_instruction_offset,
+            transfer_amount_ciphertext_validity_proof_instruction_offset: data
+                .ciphertext_validity_proof_instruction_offset,
+            fee_sigma_proof_instruction_offset: 0,
+            fee_ciphertext_validity_proof_instruction_offset: 0,
+            range_proof_instruction_offset: data.range_proof_instruction_offset,
+        }));
+    let replay = |escrow: Pubkey, instructions: &Vec<Instruction>| {
+        let mut history = BalanceHistory::new(escrow);
+        history
+            .push(&ExecutedTransaction {
+                instructions: instructions.clone(),
+                inner_instructions: Default::default(),
+                succeeded: true,
+            })
+            .unwrap();
+        format!("{:?}", history.events())
+    };
+    for escrow in [source, destination] {
+        let expected = replay(escrow, &transfer);
+        assert_ne!(expected, "[]");
+        assert_eq!(replay(escrow, &with_fee), expected);
     }
 }
 

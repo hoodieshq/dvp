@@ -14,6 +14,7 @@ import {
   Token2022Instruction,
   TOKEN_2022_PROGRAM_ADDRESS,
   getConfidentialTransferInstructionDataDecoder,
+  getConfidentialTransferWithFeeInstructionDataDecoder,
   getConfidentialMintInstructionDataDecoder,
   getConfidentialBurnInstructionDataDecoder,
   getConfidentialDepositInstructionDataDecoder,
@@ -74,8 +75,18 @@ export function executedTransactionFromRpc(
       "IncompleteHistory",
       "Missing inner instruction metadata",
     );
-  const { compiledMessage: message, loadedAddresses: loaded } =
+  const { compiledMessage: message, loadedAddresses: decoded } =
     decodeTransactionFromRpcResponse(value);
+  // Only v0 messages load lookup addresses; Kit appends them for any version.
+  const loaded = message.version === 0 ? decoded : undefined;
+  if (
+    message.version !== 0 &&
+    ((decoded?.writable.length ?? 0) > 0 || (decoded?.readonly.length ?? 0) > 0)
+  )
+    throw new ConfidentialError(
+      "IncompleteHistory",
+      "Unexpected lookup addresses",
+    );
   if (message.version === 0) {
     const writable =
       message.addressTableLookups?.reduce(
@@ -186,9 +197,11 @@ export class BalanceHistory {
         } else if (ix.programAddress === ZK_ELGAMAL_PROOF_PROGRAM_ADDRESS) {
           if (data[0] === ProofKind.GroupedValidity) {
             const proof = getVerifyProofInstructionDataDecoder().decode(data);
-            const context =
-              ix.accounts?.[proof.offset === undefined ? 0 : 1]?.address;
-            if (context) {
+            const contextIndex = proof.offset === undefined ? 0 : 1;
+            const context = ix.accounts?.[contextIndex]?.address;
+            // The proof program creates a context only when its authority
+            // follows it; otherwise the verification leaves contexts as is.
+            if (context && ix.accounts?.[contextIndex + 1]) {
               try {
                 this.contexts.set(context, this.validity(ix, resolve));
               } catch {
@@ -304,28 +317,39 @@ export class BalanceHistory {
     } catch {
       return;
     }
-    if (kind === Token2022Instruction.ConfidentialTransfer) {
+    if (
+      kind === Token2022Instruction.ConfidentialTransfer ||
+      kind === Token2022Instruction.ConfidentialTransferWithFee
+    ) {
       const source = account(ix, 0),
         destination = account(ix, 2);
       if (source !== this.escrow && destination !== this.escrow) return;
+      // DvP mints have no TransferFeeConfig. Token-2022 then executes
+      // TransferWithFee as Transfer: same accounts, fee proofs ignored.
+      let proofOffsets: number[];
+      if (kind === Token2022Instruction.ConfidentialTransfer)
+        proofOffsets = offsets(
+          getConfidentialTransferInstructionDataDecoder().decode(data),
+        );
+      else {
+        const withFee =
+          getConfidentialTransferWithFeeInstructionDataDecoder().decode(data);
+        proofOffsets = offsets({
+          ...withFee,
+          ciphertextValidityProofInstructionOffset:
+            withFee.transferAmountCiphertextValidityProofInstructionOffset,
+        });
+      }
       const context = this.transferContext(
         ix,
         index,
         top,
-        offsets(getConfidentialTransferInstructionDataDecoder().decode(data)),
+        proofOffsets,
         3,
         resolve,
       );
       if (source === this.escrow) this.amount(context, 0, false);
       if (destination === this.escrow) this.amount(context, 1, true);
-    } else if (
-      kind === Token2022Instruction.ConfidentialTransferWithFee &&
-      (account(ix, 0) === this.escrow || account(ix, 2) === this.escrow)
-    ) {
-      throw new ConfidentialError(
-        "IncompleteHistory",
-        "Confidential TransferWithFee history is unsupported",
-      );
     } else if (
       account(ix, 0) === this.escrow &&
       kind !== Token2022Instruction.ConfidentialMint &&
